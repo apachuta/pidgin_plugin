@@ -19,6 +19,58 @@
 #include "server.h"
 #include "status.h"
 
+struct _hka_protocol {
+
+        //captcha
+        void (*create_captcha)(gchar** imgData, gsize* imgSize);
+
+        //binary-to-text encoding
+        gchar* (*binary_to_text_encode)(const gchar* data, gsize size);
+        gchar* (*text_to_binary_decode)(const gchar* data, gsize* outSize);
+
+} HKA;
+
+
+typedef struct __attribute__((__packed__)) {
+        gchar tag;
+        gint id;
+} _header;
+
+typedef struct __attribute__((__packed__)) {
+        _header header;
+        gsize size;
+        gchar data[0];
+} _message;
+
+
+
+static void
+hka_send(PurpleConversation *conv, int id, const gchar* data, gsize dataSize) 
+{
+        gchar* encodedMsg;
+        gsize msgSize = sizeof(_message) + dataSize;
+        _message* msg = (_message*) g_malloc(msgSize);
+        
+        msg->header.tag = 0x01;
+        msg->header.id = id;
+        msg->size = dataSize;
+        
+        memcpy(msg->data, data, dataSize);
+
+        encodedMsg = HKA.binary_to_text_encode((gchar*)msg, msgSize);
+
+        purple_conv_im_send(PURPLE_CONV_IM(conv), encodedMsg);
+
+        g_free(msg);
+        g_free(encodedMsg);
+}
+
+static void
+load_image(gchar** imgData, gsize* imgSize) {
+        char* filename;
+        filename = "/home/agnieszka/captcha.gif";
+        g_file_get_contents(filename, imgData, imgSize, NULL);
+}
 
 
 static gboolean
@@ -26,7 +78,7 @@ writing_im_msg_cb(PurpleAccount *account, char *sender, char **buffer,
 					 PurpleConversation *conv, int *flags, void *data)
 { 
 
-      return FALSE;
+        return FALSE;
 }
 
 
@@ -39,7 +91,7 @@ sending_im_msg_cb(PurpleAccount *account, char *recipient, char **buffer, void *
 static void
 conversation_created_cb(PurpleConversation *conv, gpointer handle) //void *data)
 {
-
+       hka_send(conv, 1, "lalala", 6);
 }
 
 
@@ -71,6 +123,12 @@ plugin_load(PurplePlugin *plugin)
                                                plugin, PURPLE_CALLBACK(receiving_im_msg_cb), NULL);
 
         purple_debug_misc("hka", "plugin-load - EMPTY PLUGIN\n");
+
+
+        HKA.binary_to_text_encode = g_base64_encode;
+        HKA.text_to_binary_decode = g_base64_decode;
+        HKA.create_captcha = load_image;
+
 
 	return TRUE;
 }
