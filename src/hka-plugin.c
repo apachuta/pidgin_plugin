@@ -21,10 +21,10 @@
 
 const gchar SPECIAL_TAG = 126;
 
-const gchar INIT = 33;
-const gchar INIT_RESPONSE = 34;
-const gchar SEND_CAPTCHA = 35;
-const gchar SEND_CAPTCHA_RESPONSE = 36;
+const gchar INIT = 65;
+const gchar INIT_RESPONSE = 66;
+const gchar SEND_CAPTCHA = 67;
+const gchar SEND_CAPTCHA_RESPONSE = 68;
 
 struct HumanKeyAgreementProtocol {
 
@@ -83,7 +83,7 @@ hka_send_text(PurpleBuddy* buddy, gchar id, const gchar* text)
 }
 
 static void
-hka_send(PurpleBuddy* buddy, gchar id, const gchar* data, gsize dataSize)
+hka_send_data(PurpleBuddy* buddy, gchar id, const gchar* data, gsize dataSize)
 {
 
         gchar* encodedDataMsg;
@@ -134,11 +134,78 @@ hka_init_message(PurpleBuddy* buddy)
 static void
 hka_init_message_response(PurpleBuddy* buddy) 
 {
-        hka_send_text(buddy, INIT_RESPONSE, "");
+        hka_send_text(buddy, INIT_RESPONSE, " ");
         hka_set_protocol_state(buddy, SEND_CAPTCHA);
 
         purple_debug_misc("hka-plugin", "hka_init_message_response (hka-protocol-state = %s)\n", 
                           hka_get_protocol_state(buddy)); 
+}
+
+static void
+hka_send_captcha(PurpleBuddy* buddy)
+{
+        purple_debug_misc("hka-plugin", "hka_send_captcha (beginning)\n");
+
+        gchar* imgData;
+        gsize imgSize;
+
+        HKA.create_captcha(&imgData, &imgSize);
+
+        hka_send_data(buddy, SEND_CAPTCHA, imgData, imgSize);
+        hka_set_protocol_state(buddy, SEND_CAPTCHA_RESPONSE);
+
+        g_free(imgData);
+
+        purple_debug_misc("hka-plugin", "hka_send_captcha (hka-protocol-state = %s)\n", 
+                          hka_get_protocol_state(buddy));
+}
+
+
+static void
+hka_solved_captcha_cb(void* ignored, PurpleRequestFields* fields) 
+{
+        const gchar* solution = purple_request_fields_get_string(fields, "solution"); 
+        purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (solution = %s)\n", solution);
+}
+
+static void
+hka_show_captcha(gchar* stringMsg)
+{
+        gsize decodedDataSize;       
+        DataMessage* dataMsg;
+        PurplePlugin* plugin;
+        PurpleRequestFields *request; 
+        PurpleRequestFieldGroup *group; 
+        PurpleRequestField *field; 
+
+        plugin = purple_plugins_find_with_id("core-apachuta-hka");
+
+        dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
+
+        purple_debug_misc("hka-plugin", "hka_show_captcha (dataMsg->size = %d)\n", dataMsg->size);
+
+        group = purple_request_field_group_new(NULL); 
+       
+        field = purple_request_field_image_new("captcha", "", dataMsg->data, dataMsg->size);                // add captcha image 
+        purple_request_field_group_add_field(group, field);
+          
+        field = purple_request_field_string_new("solution", _("Solution"), "", FALSE); 
+        purple_request_field_group_add_field(group, field); 
+ 
+        request = purple_request_fields_new(); 
+        purple_request_fields_add_group(request, group); 
+  
+        purple_request_fields(plugin, 
+                         N_("CAPTCHA"), 
+                         _("Solve captcha"), 
+                         NULL, 
+                         request, 
+                         _("_Set"), G_CALLBACK(hka_solved_captcha_cb), 
+                         _("_Cancel"), NULL, 
+                         NULL, NULL, NULL, 
+                         NULL);
+
+        g_free(dataMsg);
 }
 
 static void
@@ -183,22 +250,27 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
         buddy = purple_find_buddy(account, *sender);
         state = hka_get_protocol_state(buddy); 
 
+        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (beggining, hka-protocol-state = %s, msg->id = %c, strlen(*buffer) = %d)\n", state, msg->id, strlen(*buffer)); 
 
         if(msg->tag == SPECIAL_TAG && msg->id == *state) {
                 if(*state == INIT) {
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (INIT)\n");
                         hka_init_message_response(buddy); 
                 }
                 else if(*state == INIT_RESPONSE) {
-                
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (INIT_RESPONSE)\n");
+                        hka_send_captcha(buddy); 
                 }
                 else if(*state == SEND_CAPTCHA) {
-                                
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (SEND_CAPTCHA)\n");
+                        hka_show_captcha(msg->stringMsg);         
                 }          
                 else if(*state == SEND_CAPTCHA_RESPONSE) {
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (SEND_CAPTCHA_RESPONSE)\n");
 
                 }
                 else {
-
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (else)\n");
                 }
 
                 return TRUE;
