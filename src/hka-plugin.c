@@ -77,8 +77,9 @@ hka_send_text(PurpleBuddy* buddy, gchar id, const gchar* text)
         // send message
         serv_send_im(connection, name, (gchar*)msg, 0);
 
-        g_free(msg);
-
+        purple_debug_misc("hka-plugin", "hka_send_text (text = %s, msg = %s)\n", text, msg);
+        
+        g_free(msg); 
 }
 
 static void
@@ -106,51 +107,39 @@ hka_send(PurpleBuddy* buddy, gchar id, const gchar* data, gsize dataSize)
 }
 
 
-/*
 static void
-hka_send(PurpleConversation *conv, gchar id, const gchar* data, gsize dataSize) 
+hka_set_protocol_state(PurpleBuddy* buddy, gchar stateId)
 {
-        gchar* encodedMsg;
-        gsize msgSize = sizeof(Message) + dataSize;
-        Message* msg = (Message*) g_malloc(msgSize);
-        
-        msg->header.tag = SPECIAL_TAG;
-        msg->header.id = id;
-        msg->size = dataSize;
-        
-        memcpy(msg->data, data, dataSize);
-
-        encodedMsg = HKA.binary_to_text_encode((gchar*)msg, msgSize);
-
-        purple_conv_im_send(PURPLE_CONV_IM(conv), (gchar*)msg); //encodedMsg);
-
-        g_free(msg);
-        g_free(encodedMsg);
+        gchar* state = g_strdup_printf("%c", stateId);
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-protocol-state", state);
+        g_free(state);
 }
 
-
-static void
-hka_send_text(PurpleConversation *conv, gchar id, const gchar* text) 
+static const gchar*
+hka_get_protocol_state(PurpleBuddy* buddy)
 {
-        gsize textSize = strlen(text);
-        gsize msgSize = sizeof(TextMessage) + textSize;
-        TextMessage* textMsg = (TextMessage*) g_malloc(msgSize);
-        gchar* encodedTag = HKA.binary_to_text_encode(&SPECIAL_TAG, 1);
-        gchar* encodedId = HKA.binary_to_text_encode(&id, 1);
-
-        textMsg->header.tag = *encodedTag;
-        textMsg->header.id = *encodedId;
-        
-        strcpy(textMsg->text, text);
-        
-        purple_conv_im_send(PURPLE_CONV_IM(conv), (gchar*) textMsg); 
-  
-        g_free(textMsg);
-        g_free(encodedTag);
-        g_free(encodedId);
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-protocol-state");
 }
 
-*/
+static void
+hka_init_message(PurpleBuddy* buddy) 
+{
+        hka_send_text(buddy, INIT, " Nie masz mojego super pluginu :(");
+        hka_set_protocol_state(buddy, INIT_RESPONSE);
+
+        purple_debug_misc("hka-plugin", "hka_init_message (hka-protocol-state = %s)\n", 
+                          hka_get_protocol_state(buddy)); 
+}
+
+static void
+hka_init_message_response(PurpleBuddy* buddy) 
+{
+        hka_send_text(buddy, INIT_RESPONSE, "");
+        hka_set_protocol_state(buddy, SEND_CAPTCHA);
+
+        purple_debug_misc("hka-plugin", "hka_init_message_response (hka-protocol-state = %s)\n", 
+                          hka_get_protocol_state(buddy)); 
+}
 
 static void
 load_image(gchar** imgData, gsize* imgSize) {
@@ -186,53 +175,56 @@ static gboolean
 receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                                      PurpleConversation *conv, PurpleMessageFlags *flags, void *data)
 {
+        PurpleBuddy* buddy;
+        const gchar* state;
+        Message* msg; 
         
-/*
-        Message* msg = (Message*) *buffer;
-        gchar* state = (gchar*) purple_conversation_get_data(conv, "hka-protocol-state");
+        msg = (Message*) *buffer;
+        buddy = purple_find_buddy(account, *sender);
+        state = hka_get_protocol_state(buddy); 
+
 
         if(msg->tag == SPECIAL_TAG && msg->id == *state) {
-                //if()
+                if(*state == INIT) {
+                        hka_init_message_response(buddy); 
+                }
+                else if(*state == INIT_RESPONSE) {
+                
+                }
+                else if(*state == SEND_CAPTCHA) {
+                                
+                }          
+                else if(*state == SEND_CAPTCHA_RESPONSE) {
 
+                }
+                else {
 
-
+                }
 
                 return TRUE;
         }
-*/
+
          
         return FALSE;
 }
 
 
+// extended menu
 static void
-hka_start_protocol_cb(PurpleBlistNode *node, gpointer data)
+hka_start_protocol_cb(PurpleBlistNode* node, gpointer data)
 {
-        PurpleBuddy* buddy;
-
         if(!PURPLE_BLIST_NODE_IS_BUDDY(node))
                 return;
 
-        buddy = (PurpleBuddy*) node;
-
-        hka_send_text(buddy, INIT, " Nie masz mojego super pluginu :(");
-
-/*
-        int buddyInt;
-        buddyInt = purple_blist_node_get_int(node, "buddy-int");
-        buddyInt++;
-        purple_blist_node_set_int(node, "buddy-int", buddyInt);
-
-        purple_debug_misc("kiss test", "start_protocol_cb (buddy-int = %d)\n", buddyInt); 
-
-*/
+        purple_debug_misc("hka-plugin", "hka_start_protocol_cb (hka-protocol-state = %s)\n", 
+                          hka_get_protocol_state((PurpleBuddy*) node));
+         
+        hka_init_message((PurpleBuddy*) node);
 }
  
 
-
-// extended menu
 static void
-blist_node_extended_menu_cb(PurpleBlistNode *node, GList **m)
+blist_node_extended_menu_cb(PurpleBlistNode* node, GList** m)
 {
         PurpleMenuAction* bna = NULL;
         
@@ -249,6 +241,21 @@ blist_node_extended_menu_cb(PurpleBlistNode *node, GList **m)
         
 }
 
+static void
+hka_initialize_buddy_variables(PurpleBlistNode* node) 
+{
+        gchar* state;
+
+        if(node == NULL)
+                return;
+
+        if(PURPLE_BLIST_NODE_IS_BUDDY(node)) {
+               hka_set_protocol_state((PurpleBuddy*) node, INIT);  
+        }
+
+        hka_initialize_buddy_variables(purple_blist_node_next(node, TRUE));
+       // hka_initialize_buddy_variables(purple_blist_node_get_first_child(node));
+}
 
 
 // LOAD
@@ -281,6 +288,7 @@ plugin_load(PurplePlugin *plugin)
         HKA.text_to_binary_decode = g_base64_decode;
         HKA.create_captcha = load_image;
 
+        hka_initialize_buddy_variables(purple_blist_get_root());
 
 	return TRUE;
 }
