@@ -160,23 +160,41 @@ hka_send_captcha(PurpleBuddy* buddy)
                           hka_get_protocol_state(buddy));
 }
 
+static void
+hka_send_captcha_response(PurpleBuddy* buddy)
+{
+        purple_debug_misc("hka-plugin", "hka_send_captcha_response (beginning)\n");
+
+        gchar* imgData;
+        gsize imgSize;
+
+        HKA.create_captcha(&imgData, &imgSize);
+
+        hka_send_data(buddy, SEND_CAPTCHA_RESPONSE, imgData, imgSize);
+        hka_set_protocol_state(buddy, INIT);  // Test mode !!!
+
+        g_free(imgData);
+
+        purple_debug_misc("hka-plugin", "hka_send_captcha (hka-protocol-state = %s)\n", 
+                          hka_get_protocol_state(buddy));
+}
 
 static void
-hka_solved_captcha_cb(void* ignored, PurpleRequestFields* fields) 
+hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields) 
 {
         const gchar* solution = purple_request_fields_get_string(fields, "solution"); 
         purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (solution = %s)\n", solution);
 }
 
 static void
-hka_show_captcha(gchar* stringMsg)
+hka_show_captcha(gchar* stringMsg, PurpleBuddy* buddy)
 {
         gsize decodedDataSize;       
         DataMessage* dataMsg;
         PurplePlugin* plugin;
         PurpleRequestFields *request; 
         PurpleRequestFieldGroup *group; 
-        PurpleRequestField *field; 
+        PurpleRequestField *field;
 
         plugin = purple_plugins_find_with_id("core-apachuta-hka");
 
@@ -203,7 +221,7 @@ hka_show_captcha(gchar* stringMsg)
                          _("_Set"), G_CALLBACK(hka_solved_captcha_cb), 
                          _("_Cancel"), NULL, 
                          NULL, NULL, NULL, 
-                         NULL);
+                         buddy);    // callback argument
 
         g_free(dataMsg);
 }
@@ -263,10 +281,13 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                 }
                 else if(*state == SEND_CAPTCHA) {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (SEND_CAPTCHA)\n");
-                        hka_show_captcha(msg->stringMsg);         
+                        hka_send_captcha_response(buddy);
+                        hka_show_captcha(msg->stringMsg, buddy);         
                 }          
                 else if(*state == SEND_CAPTCHA_RESPONSE) {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (SEND_CAPTCHA_RESPONSE)\n");
+                        hka_show_captcha(msg->stringMsg, buddy);
+                        hka_set_protocol_state(buddy, INIT); // testmode !!! 
 
                 }
                 else {
