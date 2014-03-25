@@ -25,6 +25,12 @@ const gchar INIT = 65;
 const gchar INIT_RESPONSE = 66;
 const gchar SEND_CAPTCHA = 67;
 const gchar SEND_CAPTCHA_RESPONSE = 68;
+const gchar PIERWSZY = 69;
+const gchar DRUGI = 70;
+
+pthread_mutex_t m;
+pthread_cond_t cond;
+int gotMessage = FALSE;
 
 struct HumanKeyAgreementProtocol {
 
@@ -171,7 +177,7 @@ hka_send_captcha_response(PurpleBuddy* buddy)
         HKA.create_captcha(&imgData, &imgSize);
 
         hka_send_data(buddy, SEND_CAPTCHA_RESPONSE, imgData, imgSize);
-        hka_set_protocol_state(buddy, INIT);  // Test mode !!!
+        hka_set_protocol_state(buddy, PIERWSZY);  // Test mode !!!
 
         g_free(imgData);
 
@@ -182,8 +188,27 @@ hka_send_captcha_response(PurpleBuddy* buddy)
 static void
 hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields) 
 {
-        const gchar* solution = purple_request_fields_get_string(fields, "solution"); 
+        const gchar* state;
+        const gchar* solution; 
+        
+        state = hka_get_protocol_state(buddy); 
+        solution = purple_request_fields_get_string(fields, "solution"); 
         purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (solution = %s)\n", solution);
+
+        if(*state == SEND_CAPTCHA_RESPONSE) { //test mode !!
+                hka_send_text(buddy, PIERWSZY, " ");
+                hka_set_protocol_state(buddy, DRUGI);
+        }  
+        else if(*state == PIERWSZY) { //test mode !!
+                //czekaj az nie dostaniesz wiadomosci PIERWSZY i wyslij wiadomosc DRUGI
+                pthread_mutex_lock(&m);
+                while(!gotMessage) {
+                        pthread_cond_wait(&cond, &m);
+                }
+                pthread_mutex_unlock(&m);
+                hka_send_text(buddy, DRUGI, " ");
+        }
+
 }
 
 static void
@@ -287,8 +312,22 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                 else if(*state == SEND_CAPTCHA_RESPONSE) {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (SEND_CAPTCHA_RESPONSE)\n");
                         hka_show_captcha(msg->stringMsg, buddy);
-                        hka_set_protocol_state(buddy, INIT); // testmode !!! 
+                        //hka_set_protocol_state(buddy, PIERWSZY); // testmode !!! 
 
+                }
+                else if(*state == PIERWSZY ) {  //testmode !!!
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (PIERWSZY)\n");
+
+                        pthread_mutex_lock(&m);
+                        gotMessage = TRUE;
+                        pthread_cond_signal(&cond);
+                        pthread_mutex_unlock(&m);
+
+                        hka_set_protocol_state(buddy, INIT); 
+                }
+                else if(*state == DRUGI ) {  //testmode !!!
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (DRUGI)\n");
+                        hka_set_protocol_state(buddy, INIT); 
                 }
                 else {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (else)\n");
@@ -371,7 +410,6 @@ plugin_load(PurplePlugin *plugin)
 
         purple_signal_connect(purple_blist_get_handle(), "blist-node-extended-menu",
                                                plugin, PURPLE_CALLBACK(blist_node_extended_menu_cb), NULL);
-
 
 
         purple_debug_misc("hka-plugin", "plugin-load\n");
