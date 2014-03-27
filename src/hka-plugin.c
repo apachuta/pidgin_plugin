@@ -128,6 +128,17 @@ hka_get_protocol_state(PurpleBuddy* buddy)
 }
 
 static void
+hka_set_synchronized(PurpleBuddy* buddy, gboolean boolean){
+        purple_blist_node_set_int((PurpleBlistNode*) buddy, "hka-synchronized", boolean);
+}
+
+static gboolean
+hka_synchronized(PurpleBuddy* buddy)
+{
+      return purple_blist_node_get_int((PurpleBlistNode*) buddy, "hka-synchronized");
+}
+
+static void
 hka_init_message(PurpleBuddy* buddy) 
 {
         hka_send_text(buddy, INIT, " Nie masz mojego super pluginu :(");
@@ -201,12 +212,17 @@ hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields)
         }  
         else if(*state == PIERWSZY) { //test mode !!
                 //czekaj az nie dostaniesz wiadomosci PIERWSZY i wyslij wiadomosc DRUGI
-                pthread_mutex_lock(&m);
-                while(!gotMessage) {
-                        pthread_cond_wait(&cond, &m);
+                if(hka_synchronized(buddy)) {
+                        purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (is synchronized)\n");
+                        hka_send_text(buddy, DRUGI, " ");
+                        hka_set_synchronized(buddy, FALSE);
+                        hka_set_protocol_state(buddy, INIT);
+
                 }
-                pthread_mutex_unlock(&m);
-                hka_send_text(buddy, DRUGI, " ");
+                else {
+                        purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (is not synchronized)\n");
+                        hka_set_synchronized(buddy, TRUE);
+                }
         }
 
 }
@@ -318,13 +334,19 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                 else if(*state == PIERWSZY ) {  //testmode !!!
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (PIERWSZY)\n");
 
-                        pthread_mutex_lock(&m);
-                        gotMessage = TRUE;
-                        pthread_cond_signal(&cond);
-                        pthread_mutex_unlock(&m);
+                        if(hka_synchronized(buddy)) {
+                                purple_debug_misc("hka-plugin", "receiving_im_msg_cb (is synchronized)\n");
+                                hka_send_text(buddy, DRUGI, " ");
+                                hka_set_synchronized(buddy, FALSE);
+                                hka_set_protocol_state(buddy, INIT);
 
-                        hka_set_protocol_state(buddy, INIT); 
-                }
+                        }
+                        else {
+                                purple_debug_misc("hka-plugin", "receiving_im_msg_cb (is not synchronized)\n");
+                                hka_set_synchronized(buddy, TRUE);
+                        }
+
+                                        }
                 else if(*state == DRUGI ) {  //testmode !!!
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (DRUGI)\n");
                         hka_set_protocol_state(buddy, INIT); 
@@ -382,7 +404,8 @@ hka_initialize_buddy_variables(PurpleBlistNode* node)
                 return;
 
         if(PURPLE_BLIST_NODE_IS_BUDDY(node)) {
-               hka_set_protocol_state((PurpleBuddy*) node, INIT);  
+               hka_set_protocol_state((PurpleBuddy*) node, INIT); 
+               hka_set_synchronized((PurpleBuddy*) node, FALSE); 
         }
 
         hka_initialize_buddy_variables(purple_blist_node_next(node, TRUE));
