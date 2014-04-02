@@ -25,12 +25,10 @@ const gchar INIT = 65;
 const gchar INIT_RESPONSE = 66;
 const gchar SEND_CAPTCHA = 67;
 const gchar SEND_CAPTCHA_RESPONSE = 68;
-const gchar PIERWSZY = 69;
-const gchar DRUGI = 70;
+const gchar UC_PAK_0 = 69;
+const gchar UC_PAK_1 = 70;
 
-pthread_mutex_t m;
-pthread_cond_t cond;
-int gotMessage = FALSE;
+const gchar FINISHED = 80;
 
 struct HumanKeyAgreementProtocol {
 
@@ -135,8 +133,68 @@ hka_set_synchronized(PurpleBuddy* buddy, gboolean boolean){
 static gboolean
 hka_synchronized(PurpleBuddy* buddy)
 {
-      return purple_blist_node_get_int((PurpleBlistNode*) buddy, "hka-synchronized");
+        return purple_blist_node_get_int((PurpleBlistNode*) buddy, "hka-synchronized");
 }
+
+static void
+hka_set_synchronized_msg(PurpleBuddy* buddy, const gchar* msg) 
+{
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-synchronized-message", msg);
+}
+
+static const gchar*
+hka_get_synchronized_msg(PurpleBuddy* buddy)
+{
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-synchronized-message");
+}
+
+static void
+hka_set_key(PurpleBuddy* buddy, const gchar* key)
+{
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-key", key);
+}
+
+static const gchar*
+hka_get_key(PurpleBuddy* buddy)
+{
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-key"); 
+}
+
+static void
+hka_set_session_key(PurpleBuddy* buddy, const gchar* session_key)
+{
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-session-key", session_key);
+}
+
+static const gchar*
+hka_get_session_key(PurpleBuddy* buddy)
+{
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-session-key"); 
+}
+
+static void
+hka_set_password(PurpleBuddy* buddy, const gchar* password)
+{
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-password", password);
+}
+
+static const gchar*
+hka_get_password(PurpleBuddy* buddy)
+{
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-password"); 
+}
+
+static void
+hka_create_and_set_password(PurpleBuddy* buddy, const char* str1, const char* str2) 
+{
+        gchar* password = g_strdup_printf("%s%s", str1, str2);
+        purple_debug_misc("hka-plugin", "hka_create_and_set_password (password = %s)\n", password);
+
+        hka_set_password(buddy, password);
+        g_free(password);
+}
+
+
 
 static void
 hka_init_message(PurpleBuddy* buddy) 
@@ -167,6 +225,7 @@ hka_send_captcha(PurpleBuddy* buddy)
         gsize imgSize;
 
         HKA.create_captcha(&imgData, &imgSize);
+        hka_set_password(buddy, "aaa"); //TODO niech create_captcha podaje rozwiazanie. wpisac je tutaj
 
         hka_send_data(buddy, SEND_CAPTCHA, imgData, imgSize);
         hka_set_protocol_state(buddy, SEND_CAPTCHA_RESPONSE);
@@ -186,9 +245,10 @@ hka_send_captcha_response(PurpleBuddy* buddy)
         gsize imgSize;
 
         HKA.create_captcha(&imgData, &imgSize);
+        hka_set_password(buddy, "aaa"); //TODO niech create_captcha podaje rozwiazanie. wpisac je tutaj
 
         hka_send_data(buddy, SEND_CAPTCHA_RESPONSE, imgData, imgSize);
-        hka_set_protocol_state(buddy, PIERWSZY);  // Test mode !!!
+        hka_set_protocol_state(buddy, UC_PAK_0);  // Test mode !!!
 
         g_free(imgData);
 
@@ -196,27 +256,71 @@ hka_send_captcha_response(PurpleBuddy* buddy)
                           hka_get_protocol_state(buddy));
 }
 
+// Universally-Composable Password Authenticated Key Exchange UC-PAK
+
+static void
+hka_UC_PAK_step0(PurpleBuddy* buddy) 
+{
+        const gchar* password = hka_get_password(buddy);
+
+        //testmode!!
+        hka_send_text(buddy, UC_PAK_0, password);
+        hka_set_protocol_state(buddy, UC_PAK_1);
+}
+
+static void
+hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* msg)
+{
+        const gchar* password = hka_get_password(buddy);
+
+        //testmode!!
+        hka_set_key(buddy, msg);
+        hka_set_session_key(buddy, msg);
+
+        hka_send_text(buddy, UC_PAK_1, password);
+        hka_set_protocol_state(buddy, FINISHED);
+}
+
+static void
+hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* msg) {
+        //testmode!!
+        hka_set_key(buddy, msg);
+        hka_set_session_key(buddy, msg);
+
+        hka_set_protocol_state(buddy, FINISHED);
+}
+
+
+
 static void
 hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields) 
 {
         const gchar* state;
-        const gchar* solution; 
-        
+        const gchar* solution;
+        gchar* oldPassword; 
+
         state = hka_get_protocol_state(buddy); 
-        solution = purple_request_fields_get_string(fields, "solution"); 
+        solution = purple_request_fields_get_string(fields, "solution");
+        oldPassword = g_strdup_printf("%s", hka_get_password(buddy));
+
+
         purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (solution = %s)\n", solution);
 
         if(*state == SEND_CAPTCHA_RESPONSE) { //test mode !!
-                hka_send_text(buddy, PIERWSZY, " ");
-                hka_set_protocol_state(buddy, DRUGI);
+                hka_create_and_set_password(buddy, oldPassword, solution);
+                
+                hka_UC_PAK_step0(buddy);
+
         }  
-        else if(*state == PIERWSZY) { //test mode !!
-                //czekaj az nie dostaniesz wiadomosci PIERWSZY i wyslij wiadomosc DRUGI
+        else if(*state == UC_PAK_0) { //test mode !!
+
+                hka_create_and_set_password(buddy, solution, oldPassword);
+
                 if(hka_synchronized(buddy)) {
                         purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (is synchronized)\n");
-                        hka_send_text(buddy, DRUGI, " ");
                         hka_set_synchronized(buddy, FALSE);
-                        hka_set_protocol_state(buddy, INIT);
+                        
+                        hka_UC_PAK_step1(buddy, hka_get_synchronized_msg(buddy));
 
                 }
                 else {
@@ -224,6 +328,8 @@ hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields)
                         hka_set_synchronized(buddy, TRUE);
                 }
         }
+
+        g_free(oldPassword);
 
 }
 
@@ -309,7 +415,7 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
         buddy = purple_find_buddy(account, *sender);
         state = hka_get_protocol_state(buddy); 
 
-        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (beggining, hka-protocol-state = %s, msg->id = %c, strlen(*buffer) = %d)\n", state, msg->id, strlen(*buffer)); 
+        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (beggining, hka-protocol-state = %s, msg->id = %c, strlen(*buffer) = %d, password = %s)\n", state, msg->id, strlen(*buffer), hka_get_password(buddy)); 
 
         if(msg->tag == SPECIAL_TAG && msg->id == *state) {
                 if(*state == INIT) {
@@ -328,28 +434,29 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                 else if(*state == SEND_CAPTCHA_RESPONSE) {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (SEND_CAPTCHA_RESPONSE)\n");
                         hka_show_captcha(msg->stringMsg, buddy);
-                        //hka_set_protocol_state(buddy, PIERWSZY); // testmode !!! 
+                        //hka_set_protocol_state(buddy, UC_PAK_0); // testmode !!! 
 
                 }
-                else if(*state == PIERWSZY ) {  //testmode !!!
-                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (PIERWSZY)\n");
+                else if(*state == UC_PAK_0 ) {  //testmode !!!
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (UC_PAK_0)\n");
 
                         if(hka_synchronized(buddy)) {
                                 purple_debug_misc("hka-plugin", "receiving_im_msg_cb (is synchronized)\n");
-                                hka_send_text(buddy, DRUGI, " ");
                                 hka_set_synchronized(buddy, FALSE);
-                                hka_set_protocol_state(buddy, INIT);
+                                
+                                hka_UC_PAK_step1(buddy, msg->stringMsg); 
 
                         }
                         else {
                                 purple_debug_misc("hka-plugin", "receiving_im_msg_cb (is not synchronized)\n");
+                                hka_set_synchronized_msg(buddy, msg->stringMsg);
                                 hka_set_synchronized(buddy, TRUE);
                         }
 
                                         }
-                else if(*state == DRUGI ) {  //testmode !!!
-                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (DRUGI)\n");
-                        hka_set_protocol_state(buddy, INIT); 
+                else if(*state == UC_PAK_1 ) {  //testmode !!!
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (UC_PAK_1)\n");
+                        hka_UC_PAK_step2(buddy, msg->stringMsg); 
                 }
                 else {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (else)\n");
@@ -367,13 +474,20 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
 static void
 hka_start_protocol_cb(PurpleBlistNode* node, gpointer data)
 {
+        const gchar* state; 
+
         if(!PURPLE_BLIST_NODE_IS_BUDDY(node))
                 return;
 
+        state = hka_get_protocol_state((PurpleBuddy*) node);
+
         purple_debug_misc("hka-plugin", "hka_start_protocol_cb (hka-protocol-state = %s)\n", 
-                          hka_get_protocol_state((PurpleBuddy*) node));
-         
-        hka_init_message((PurpleBuddy*) node);
+                          state);
+
+        if(*state == INIT)
+                hka_init_message((PurpleBuddy*) node);
+        else if(*state == FINISHED) 
+                purple_debug_misc("hka-plugin", "hka_start_protocol_cb (state FINISHED, key = %s)\n", hka_get_key((PurpleBuddy*) node));
 }
  
 
@@ -404,8 +518,15 @@ hka_initialize_buddy_variables(PurpleBlistNode* node)
                 return;
 
         if(PURPLE_BLIST_NODE_IS_BUDDY(node)) {
-               hka_set_protocol_state((PurpleBuddy*) node, INIT); 
-               hka_set_synchronized((PurpleBuddy*) node, FALSE); 
+
+                if(hka_get_key((PurpleBuddy*) node) == "") {      
+                        hka_set_protocol_state((PurpleBuddy*) node, INIT);
+                }
+                else {
+                        hka_set_protocol_state((PurpleBuddy*) node, INIT ); //FINISHED);  <-- TODO
+                }
+                 
+                hka_set_synchronized((PurpleBuddy*) node, FALSE); 
         }
 
         hka_initialize_buddy_variables(purple_blist_node_next(node, TRUE));
