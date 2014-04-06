@@ -13,29 +13,29 @@ AM_CFLAGS = \
 
 
 # Helper library
-#pkginclude_HEADERS = \
-#        include/my-lib-test.h
+pkginclude_HEADERS = \
+        include/libcaptcha.h
 
-#lib_LTLIBRARIES = \
-#        my-lib-test.la
+lib_LTLIBRARIES = \
+        libcaptcha.la
 
-#my_lib_test_la_SOURCES = \
-#        include/my-lib-test.h \
-#        include/my-lib-test.c
+libcaptcha_la_SOURCES = \
+        include/libcaptcha.h \
+        include/libcaptcha.c
 
-#my_lib_test_la_LDFLAGS = \
-#        -no-undefined \
-#        -avoid-version -module \
-#        -export-dynamic
+libcaptcha_la_LDFLAGS = \
+        -no-undefined \
+        -avoid-version -module \
+        -export-dynamic
 
 
 # Plugin
-lib_LTLIBRARIES = hka-plugin.la # +=  ??
+lib_LTLIBRARIES += hka-plugin.la
 
 hka_plugin_la_SOURCES = \
 	src/hka-plugin.c \
 	include/config.h \
-	include/my-lib-test.h
+	include/libcaptcha.h
 
 hka_plugin_la_LDFLAGS = \
 	-no-undefined \
@@ -49,6 +49,5 @@ hka_plugin_la_CFLAGS = \
 
 hka_plugin_la_LIBADD = \
 	$(PURPLE_LIBS) \
-	$(GLIB_LIBS)
-#	my-lib-test.la
-
+	$(GLIB_LIBS) \
+	libcaptcha.la

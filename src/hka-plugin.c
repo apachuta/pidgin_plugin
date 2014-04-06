@@ -19,6 +19,8 @@
 #include "server.h"
 #include "status.h"
 
+#include "libcaptcha.h"
+
 const gchar SPECIAL_TAG = 126;
 
 const gchar INIT = 65;
@@ -33,7 +35,7 @@ const gchar FINISHED = 80;
 struct HumanKeyAgreementProtocol {
 
         //captcha
-        void (*create_captcha)(gchar** imgData, gsize* imgSize);
+        void (*create_captcha)(gchar** imgData, gsize* imgSize, gchar** solution);
 
         //binary-to-text encoding
         gchar* (*binary_to_text_encode)(const gchar* data, gsize size);
@@ -85,7 +87,6 @@ hka_send_text(PurpleBuddy* buddy, gchar id, const gchar* text)
         serv_send_im(connection, name, (gchar*)msg, 0);
 
         purple_debug_misc("hka-plugin", "hka_send_text (text = %s, msg = %s)\n", text, msg);
-        
         g_free(msg); 
 }
 
@@ -226,14 +227,16 @@ hka_send_captcha(PurpleBuddy* buddy)
 
         gchar* imgData;
         gsize imgSize;
+        gchar* solution;
 
-        HKA.create_captcha(&imgData, &imgSize);
-        hka_set_password(buddy, "aaa"); //TODO niech create_captcha podaje rozwiazanie. wpisac je tutaj
+        HKA.create_captcha(&imgData, &imgSize, &solution);
+        hka_set_password(buddy, solution); 
 
         hka_send_data(buddy, SEND_CAPTCHA, imgData, imgSize);
         hka_set_protocol_state(buddy, SEND_CAPTCHA_RESPONSE);
 
         g_free(imgData);
+        g_free(solution);
 
         purple_debug_misc("hka-plugin", "hka_send_captcha (hka-protocol-state = %c)\n", 
                           hka_get_protocol_state(buddy));
@@ -246,14 +249,16 @@ hka_send_captcha_response(PurpleBuddy* buddy)
 
         gchar* imgData;
         gsize imgSize;
+        gchar* solution;
 
-        HKA.create_captcha(&imgData, &imgSize);
-        hka_set_password(buddy, "aaa"); //TODO niech create_captcha podaje rozwiazanie. wpisac je tutaj
+        HKA.create_captcha(&imgData, &imgSize, &solution);
+        hka_set_password(buddy, solution);
 
         hka_send_data(buddy, SEND_CAPTCHA_RESPONSE, imgData, imgSize);
         hka_set_protocol_state(buddy, UC_PAK_0);  // Test mode !!!
 
         g_free(imgData);
+        g_free(solution);
 
         purple_debug_misc("hka-plugin", "hka_send_captcha (hka-protocol-state = %c)\n", 
                           hka_get_protocol_state(buddy));
@@ -381,6 +386,19 @@ load_image(gchar** imgData, gsize* imgSize) {
         char* filename;
         filename = "/home/agnieszka/captcha.gif";
         g_file_get_contents(filename, imgData, imgSize, NULL);
+}
+
+void create_captcha(gchar** imgData, gsize* imgSize, gchar** solution) {
+
+  unsigned char im[70*200];
+  
+  *imgData = (unsigned char*) g_malloc(gifsize);
+  *solution = (gchar*) g_malloc(6);
+
+  captcha(im, *solution);
+  makegif(im, *imgData);
+
+  *imgSize = gifsize;
 }
 
 static gchar*
@@ -610,7 +628,7 @@ plugin_load(PurplePlugin *plugin)
 
         HKA.binary_to_text_encode = g_base64_encode;
         HKA.text_to_binary_decode = g_base64_decode;
-        HKA.create_captcha = load_image;
+        HKA.create_captcha = create_captcha;
         HKA.encode = simple_encode;
         HKA.decode = simple_decode;
 
