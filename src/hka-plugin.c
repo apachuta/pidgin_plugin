@@ -264,6 +264,53 @@ hka_send_captcha_response(PurpleBuddy* buddy)
                           hka_get_protocol_state(buddy));
 }
 
+static void
+hka_show_info(const gchar* primaryInfo, const gchar* secondaryInfo) {
+        PurplePlugin* plugin;
+
+        plugin = purple_plugins_find_with_id("core-apachuta-hka");
+  
+        purple_debug_misc("hka-plugin", "hka_show_info (primaryInfo = %s)\n", primaryInfo);
+
+        purple_request_action ( 
+        plugin, // handle
+        "Human Key Agreement", // title
+        primaryInfo, // primary
+        secondaryInfo, // secondary
+        0, // default action index
+        NULL, // PurpleAccount
+        "Qwerty", // the username of the buddy associated with the reqest (char*)
+        NULL, // PurpleConversation
+        NULL, // data to pass to the callback
+        1, // number of actions
+        _("_OK"), // action
+        NULL  // callback
+  ); 
+
+}
+
+static void
+hka_show_protocol_success_info(PurpleBuddy* buddy) 
+{
+        const gchar* buddyName = purple_buddy_get_alias(buddy);
+        gchar* primaryInfo = g_strdup_printf("The connection with %s is now secure.", buddyName);
+
+        hka_show_info(primaryInfo, NULL);
+
+        g_free(primaryInfo);
+}
+
+static void
+hka_show_protocol_failure_info(PurpleBuddy* buddy) 
+{
+        const gchar* buddyName = purple_buddy_get_alias(buddy);
+        gchar* primaryInfo = g_strdup_printf("The connection with %s is NOT secure.", buddyName);
+
+        hka_show_info(primaryInfo, NULL);
+
+        g_free(primaryInfo);
+}
+
 // Universally-Composable Password Authenticated Key Exchange UC-PAK
 
 static void
@@ -286,33 +333,49 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* msg)
         hka_set_session_key(buddy, msg);
 
         hka_send_text(buddy, UC_PAK_1, password);
-        hka_set_protocol_state(buddy, FINISHED);
+
+        if(strlen(password) == 10 && strlen(msg) == 10) {
+                hka_set_protocol_state(buddy, FINISHED);
+                hka_show_protocol_success_info(buddy);
+        }
+        else{
+
+                hka_set_protocol_state(buddy, INIT);
+                hka_show_protocol_failure_info(buddy);
+        }      
 }
 
 static void
 hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* msg) {
         //testmode!!
+        const gchar* password = hka_get_password(buddy);
+        
         hka_set_key(buddy, msg);
         hka_set_session_key(buddy, msg);
 
-        hka_set_protocol_state(buddy, FINISHED);
+        if(strlen(password) == 10 && strlen(msg) == 10) {
+                hka_set_protocol_state(buddy, FINISHED);
+                hka_show_protocol_success_info(buddy);
+        }
+        else{
+
+                hka_set_protocol_state(buddy, INIT);
+                hka_show_protocol_failure_info(buddy);
+        } 
 }
 
 
 
 static void
-hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields) 
+hka_captcha_cb(PurpleBuddy* buddy, const gchar* solution) 
 {
         gchar state;
-        const gchar* solution;
         gchar* oldPassword; 
 
         state = hka_get_protocol_state(buddy); 
-        solution = purple_request_fields_get_string(fields, "solution");
         oldPassword = g_strdup_printf("%s", hka_get_password(buddy));
 
-
-        purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (solution = %s)\n", solution);
+        purple_debug_misc("hka-plugin", "hka_captcha_cb (solution = %s)\n", solution);
 
         if(state == SEND_CAPTCHA_RESPONSE) { //test mode !!
                 hka_create_and_set_password(buddy, oldPassword, solution);
@@ -325,20 +388,34 @@ hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields)
                 hka_create_and_set_password(buddy, solution, oldPassword);
 
                 if(hka_synchronized(buddy)) {
-                        purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (is synchronized)\n");
+                        purple_debug_misc("hka-plugin", "hka_captcha_cb (is synchronized)\n");
                         hka_set_synchronized(buddy, FALSE);
                         
                         hka_UC_PAK_step1(buddy, hka_get_synchronized_msg(buddy));
 
                 }
                 else {
-                        purple_debug_misc("hka-plugin", "hka_solved_captcha_cb (is not synchronized)\n");
+                        purple_debug_misc("hka-plugin", "hka_captcha_cb (is not synchronized)\n");
                         hka_set_synchronized(buddy, TRUE);
                 }
         }
 
         g_free(oldPassword);
 
+}
+
+
+static void
+hka_cancel_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields) 
+{
+        hka_captcha_cb(buddy, "");
+}
+
+static void
+hka_solved_captcha_cb(PurpleBuddy* buddy, PurpleRequestFields* fields) 
+{
+        const gchar* solution = purple_request_fields_get_string(fields, "solution");
+        hka_captcha_cb(buddy, solution);
 }
 
 static void
@@ -350,6 +427,23 @@ hka_show_captcha(gchar* stringMsg, PurpleBuddy* buddy)
         PurpleRequestFields *request; 
         PurpleRequestFieldGroup *group; 
         PurpleRequestField *field;
+        const gchar* buddyName;
+        gchar* text;
+        gchar state;
+
+        state = hka_get_protocol_state(buddy); 
+
+        buddyName = purple_buddy_get_alias(buddy); 
+
+        if(state == SEND_CAPTCHA_RESPONSE) { 
+                text = g_strdup_printf("Establish a secure connection with %s. Solve captcha:", buddyName);
+
+        }  
+        else if(state == UC_PAK_0) { 
+                text = g_strdup_printf("%s wants to establish a secure connection. Solve captcha:", buddyName);
+        }
+
+
 
         plugin = purple_plugins_find_with_id("core-apachuta-hka");
 
@@ -357,7 +451,7 @@ hka_show_captcha(gchar* stringMsg, PurpleBuddy* buddy)
 
         purple_debug_misc("hka-plugin", "hka_show_captcha (dataMsg->size = %d)\n", dataMsg->size);
 
-        group = purple_request_field_group_new(NULL); 
+        group = purple_request_field_group_new(NULL);  
        
         field = purple_request_field_image_new("captcha", "", dataMsg->data, dataMsg->size);                // add captcha image 
         purple_request_field_group_add_field(group, field);
@@ -369,12 +463,12 @@ hka_show_captcha(gchar* stringMsg, PurpleBuddy* buddy)
         purple_request_fields_add_group(request, group); 
   
         purple_request_fields(plugin, 
-                         N_("CAPTCHA"), 
-                         _("Solve captcha"), 
+                         N_("Human Key Agreement"), 
+                         _(text), 
                          NULL, 
                          request, 
                          _("_Set"), G_CALLBACK(hka_solved_captcha_cb), 
-                         _("_Cancel"), NULL, 
+                         _("_Cancel"), G_CALLBACK(hka_cancel_captcha_cb), 
                          NULL, NULL, NULL, 
                          buddy);    // callback argument
 
