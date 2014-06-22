@@ -9,7 +9,8 @@ AM_CFLAGS = \
 	-I /usr/include/glib-2.0/include \
 	-I /usr/lib64/glib-2.0 \
 	-I /usr/lib64/glib-2.0/include \
-	-I /home/agnieszka/Pidgin/pidgin-2.10.7/libpurple
+	-I /home/agnieszka/Pidgin/pidgin-2.10.7/libpurple \
+	-lcrypto
 
 
 # Helper library

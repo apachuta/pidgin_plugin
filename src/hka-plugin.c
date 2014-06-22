@@ -19,6 +19,8 @@
 #include "server.h"
 #include "status.h"
 
+#include <openssl/hmac.h>
+
 #include "libcaptcha.h"
 
 const gchar SPECIAL_TAG = 126;
@@ -58,6 +60,93 @@ typedef struct __attribute__((__packed__)) {
         gchar data[0];
 } DataMessage;
 
+// ------------------------------------------------- crypto --------------------------------
+
+
+void handleErrors() {
+  purple_debug_misc("hka-plugin", "hmac_test (Errors)\n"); 
+}
+
+int hmac_vrfy(const void *key, int keySize, const unsigned char *msg, int msgSize,
+               const unsigned char *tag, int tagSize) {
+  
+  unsigned char* newTag;
+  int newTagSize;
+  int i;
+  
+  newTag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
+  
+  if(NULL == HMAC(EVP_sha512(), key, keySize, msg, msgSize, newTag, &newTagSize)) handleErrors();
+  
+  if(tagSize != newTagSize)
+  {
+    return 0;   
+  }
+  
+  for(i=0; i< tagSize; i++)
+  {
+    if(tag[i] != newTag[i])
+    {
+      return 0;
+    }
+  }
+    
+  return 1;
+}
+
+void hmac_test()
+{
+    int i;
+    int taglen;
+
+    // The key to hash
+    char key[] = "012345678";
+
+    // The data that we're going to hash using HMAC
+    char data[] = "hello world!";
+    
+    unsigned char* digest;
+    unsigned char* tag;
+    
+    tag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
+    
+    // Using sha1 hash engine here.
+    // You may use other hash engines. e.g EVP_md5(), EVP_sha224, EVP_sha512, etc
+    digest = HMAC(EVP_sha512(), key, strlen(key), (unsigned char*)data, strlen(data), tag, &taglen);    
+
+    purple_debug_misc("hka-plugin", "hmac_test (tag length: %d)\n", taglen);
+    
+    // Be careful of the length of string with the choosen hash engine. SHA1 produces a 20-byte hash value which rendered as 40 characters.
+    // Change the length accordingly with your choosen hash engine
+/*  char mdString[20];
+    for(i = 0; i < 20; i++)
+         sprintf(&mdString[i*2], "%02x", (unsigned int)digest[i]);
+
+    printf("HMAC digest: %s\n", mdString);
+*/ 
+/*
+    printf("EVP_MAX_MD_SIZE: %d\n", EVP_MAX_MD_SIZE);
+    printf("digest:\n");
+    BIO_dump_fp(stdout, digest, taglen);
+    printf("tag\n");
+    BIO_dump_fp(stdout, tag, taglen);
+*/
+
+    if(hmac_vrfy(key, strlen(key), data, strlen(data), tag, taglen))
+    {
+      purple_debug_misc("hka-plugin", "hmac_test (tag verification positive)\n");   
+    }
+    else
+    {
+      purple_debug_misc("hka-plugin", "hmac_test (tag verification negative)\n");
+    }
+    
+    OPENSSL_free(tag);
+    
+}
+
+
+// ------------------------------------------------- crypto end ----------------------------
 
 static void
 hka_send_text(PurpleBuddy* buddy, gchar id, const gchar* text) 
@@ -727,6 +816,8 @@ plugin_load(PurplePlugin *plugin)
         HKA.decode = simple_decode;
 
         hka_initialize_buddy_variables(purple_blist_get_root());
+
+        hmac_test();
 
 	return TRUE;
 }
