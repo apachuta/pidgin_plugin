@@ -20,6 +20,9 @@
 #include "status.h"
 
 #include <openssl/hmac.h>
+#include <openssl/dh.h>
+#include <openssl/engine.h>
+#include <openssl/bn.h>
 
 #include "libcaptcha.h"
 
@@ -60,12 +63,44 @@ typedef struct __attribute__((__packed__)) {
         gchar data[0];
 } DataMessage;
 
+
+DH* DiffieHellmanParams;
+
 // ------------------------------------------------- crypto --------------------------------
 
+char* BIG_PRIME = "29061604295055353424253889135036686149137613928445910579110547029313875439718550350988053475571612683327323345153327231211393015249645532776256400727289966400641306957507901234746498758025182038940679671682664254797692666182679379869976683486935708929913042514460763209045932503591749324455446799953688622329144696410730884066597340564332192788178741520134107078162110726238941776579522198478030817552964465684161208914242979565336565429929254106908575535379162804359248056067569743805576755474787518182630886631992744331412503393707482996568555663026991098873069831574888407838245872758683738640476645977988673820659";
+
+char* GENERATOR = "2";
 
 void handleErrors() {
   purple_debug_misc("hka-plugin", "hmac_test (Errors)\n"); 
 }
+
+void create_diffie_hellman_object(DH** dh)
+{
+    BIGNUM* p = NULL;
+    BIGNUM* g = NULL;
+    char* gen;
+
+    if(0 == (BN_dec2bn(&p, BIG_PRIME))) handleErrors();
+    if(0 == (BN_dec2bn(&g, GENERATOR))) handleErrors();
+ 
+    if(NULL == (*dh = DH_new())) handleErrors();
+    (*dh)->p = p;
+    (*dh)->g = g;
+
+    purple_debug_misc("hka-plugin", "create_diffie_hellman_object (created)\n"); 
+    
+    gen = BN_bn2dec((*dh)->g);
+    purple_debug_misc("hka-plugin", "create_diffie_hellman_object (generator: %s)\n", gen);
+      
+}
+
+void free_diffie_hellman_object(DH* dh)
+{
+    OPENSSL_free(DiffieHellmanParams);
+}
+
 
 int hmac_vrfy(const void *key, int keySize, const unsigned char *msg, int msgSize,
                const unsigned char *tag, int tagSize) {
@@ -788,6 +823,8 @@ hka_initialize_buddy_variables(PurpleBlistNode* node)
 static gboolean
 plugin_load(PurplePlugin *plugin)
 {
+        char* g; 
+
 	void *conversation = purple_conversations_get_handle();
 
 	purple_signal_connect(conversation, "writing-im-msg",
@@ -817,7 +854,13 @@ plugin_load(PurplePlugin *plugin)
 
         hka_initialize_buddy_variables(purple_blist_get_root());
 
-        hmac_test();
+
+        create_diffie_hellman_object(&DiffieHellmanParams);
+        g = BN_bn2dec(DiffieHellmanParams->g);
+        purple_debug_misc("hka-plugin", "plugin_load (generator: %s )\n", g);   
+ 
+        OPENSSL_free(g);
+        free_diffie_hellman_object(DiffieHellmanParams); 
 
 	return TRUE;
 }
