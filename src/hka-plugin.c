@@ -64,8 +64,6 @@ typedef struct __attribute__((__packed__)) {
 } DataMessage;
 
 
-DH* DiffieHellmanParams;
-
 // ------------------------------------------------- crypto --------------------------------
 
 char* BIG_PRIME = "29061604295055353424253889135036686149137613928445910579110547029313875439718550350988053475571612683327323345153327231211393015249645532776256400727289966400641306957507901234746498758025182038940679671682664254797692666182679379869976683486935708929913042514460763209045932503591749324455446799953688622329144696410730884066597340564332192788178741520134107078162110726238941776579522198478030817552964465684161208914242979565336565429929254106908575535379162804359248056067569743805576755474787518182630886631992744331412503393707482996568555663026991098873069831574888407838245872758683738640476645977988673820659";
@@ -93,12 +91,22 @@ void create_diffie_hellman_object(DH** dh)
     
     gen = BN_bn2dec((*dh)->g);
     purple_debug_misc("hka-plugin", "create_diffie_hellman_object (generator: %s)\n", gen);
-      
+    OPENSSL_free(gen);  
 }
 
-void free_diffie_hellman_object(DH* dh)
+void generate_diffie_hellman_keys(char** publicKey, char** privateKey)
 {
-    OPENSSL_free(DiffieHellmanParams);
+    DH* dh;
+
+    create_diffie_hellman_object(&dh);
+
+    /* Generate the public and private key pair */
+    if(1 != DH_generate_key(dh)) handleErrors();
+    
+    *publicKey = BN_bn2dec(dh->pub_key);
+    *privateKey = BN_bn2dec(dh->priv_key); 
+
+    OPENSSL_free(dh);
 }
 
 
@@ -322,6 +330,29 @@ hka_create_and_set_password(PurpleBuddy* buddy, const char* str1, const char* st
         g_free(password);
 }
 
+static void
+hka_set_dh_public_key(PurpleBuddy* buddy, const gchar* key)
+{
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-dh-public-key", key);
+}
+
+static const gchar*
+hka_get_dh_public_key(PurpleBuddy* buddy)
+{
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-dh-public-key"); 
+}
+
+static void
+hka_set_dh_private_key(PurpleBuddy* buddy, const gchar* key)
+{
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-dh-private-key", key);
+}
+
+static const gchar*
+hka_get_dh_private_key(PurpleBuddy* buddy)
+{
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-dh-private-key"); 
+}
 
 
 static void
@@ -440,16 +471,40 @@ hka_show_protocol_failure_info(PurpleBuddy* buddy)
 static void
 hka_UC_PAK_step0(PurpleBuddy* buddy) 
 {
+  /*
         const gchar* password = hka_get_password(buddy);
 
         //testmode!!
         hka_send_text(buddy, UC_PAK_0, password);
         hka_set_protocol_state(buddy, UC_PAK_1);
+
+  */
+
+        char* publicKey;
+        char* privateKey;
+
+        generate_diffie_hellman_keys(&publicKey, &privateKey);
+        
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step0 (pub key: %s )\n", publicKey);   
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step0 (priv key: %s )\n", privateKey);   
+
+        hka_set_dh_public_key(buddy, publicKey);
+        hka_set_dh_private_key(buddy, privateKey);
+
+        // send dh public key
+        hka_send_text(buddy, UC_PAK_0, publicKey);
+        //hka_set_protocol_state(buddy, UC_PAK_1);
+        hka_set_protocol_state(buddy, INIT);
+        
+        OPENSSL_free(privateKey);
+        OPENSSL_free(publicKey);
 }
 
 static void
 hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* msg)
 {
+    
+    /*
         const gchar* password = hka_get_password(buddy);
 
         //testmode!!
@@ -466,11 +521,18 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* msg)
 
                 hka_set_protocol_state(buddy, INIT);
                 hka_show_protocol_failure_info(buddy);
-        }      
+        }
+        
+    */    
+    
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (received public key: %s )\n", msg);
+        hka_set_protocol_state(buddy, INIT);  
 }
 
 static void
 hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* msg) {
+    
+    /*
         //testmode!!
         const gchar* password = hka_get_password(buddy);
         
@@ -485,7 +547,9 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* msg) {
 
                 hka_set_protocol_state(buddy, INIT);
                 hka_show_protocol_failure_info(buddy);
-        } 
+        }
+        
+    */ 
 }
 
 
@@ -823,7 +887,10 @@ hka_initialize_buddy_variables(PurpleBlistNode* node)
 static gboolean
 plugin_load(PurplePlugin *plugin)
 {
-        char* g; 
+        char* pub;
+        char* pub2;
+        char* priv;
+        char* priv2;
 
 	void *conversation = purple_conversations_get_handle();
 
@@ -855,12 +922,24 @@ plugin_load(PurplePlugin *plugin)
         hka_initialize_buddy_variables(purple_blist_get_root());
 
 
-        create_diffie_hellman_object(&DiffieHellmanParams);
-        g = BN_bn2dec(DiffieHellmanParams->g);
-        purple_debug_misc("hka-plugin", "plugin_load (generator: %s )\n", g);   
- 
-        OPENSSL_free(g);
-        free_diffie_hellman_object(DiffieHellmanParams); 
+        // crypto tests
+        /*
+        generate_diffie_hellman_keys(&pub, &priv);
+        
+        purple_debug_misc("hka-plugin", "plugin_load (pub key: %s )\n", pub);   
+        purple_debug_misc("hka-plugin", "plugin_load (priv key: %s )\n", priv);   
+
+        generate_diffie_hellman_keys(&pub2, &priv2);
+        
+        purple_debug_misc("hka-plugin", "plugin_load (pub key: %s )\n", pub2);   
+        purple_debug_misc("hka-plugin", "plugin_load (priv key: %s )\n", priv2);   
+
+
+        OPENSSL_free(priv);
+        OPENSSL_free(pub); 
+        OPENSSL_free(priv2);
+        OPENSSL_free(pub2); 
+        */
 
 	return TRUE;
 }
