@@ -42,7 +42,8 @@ const gchar UC_PAK_1 = 70;
 const gchar FINISHED = 80;
 
 // const values
-const int IV_SIZE = 128; // initialization vector size 
+const int IV_SIZE = 16; // initialization vector size 
+const int UC_PAK_KEY_SIZE = 32;
 
 // structures
 struct HumanKeyAgreementProtocol {
@@ -72,10 +73,9 @@ typedef struct __attribute__((__packed__)) {
 } DataMessage;
 
 typedef struct __attribute__((__packed__)) {
+        gchar iv[16];
         gsize encryptedKeySize;
-        gchar encryptedKey[0];
-        gsize ivSize;
-        gchar iv[0];  
+        gchar encryptedKey[0];  
 } EncryptedKeyMessage;
 
 // ------------------------------------------------- crypto --------------------------------
@@ -295,7 +295,7 @@ int encrypt_aes_256(unsigned char *plaintext, int plaintext_len, unsigned char *
 }
 
 
-int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
+int decrypt_aes_256(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
     unsigned char *iv, unsigned char *plaintext)
 {
   EVP_CIPHER_CTX *ctx;
@@ -704,10 +704,11 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
         char* privateKey;
         const char* password;
         /* A 128 bit IV */
-        unsigned char *iv = "01234567890123456";
-        unsigned char key[256];
+        unsigned char *iv = "0123456789012345";
+        unsigned char key[UC_PAK_KEY_SIZE];
         unsigned char* ciphertext; 
         int ciphertextSize;
+
         EncryptedKeyMessage* msg;
         int msgSize;
 
@@ -727,19 +728,18 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
         /* Initialise the library */
         openssl_init();
 
-        // encode public key with password
+        // encrypt public key with password
         password = hka_get_password(buddy);
-        password_to_key(password, key, 256);
+        password_to_key(password, key, UC_PAK_KEY_SIZE);
         ciphertextSize = encrypt_aes_256(publicKey, strlen(publicKey), key, iv, &ciphertext);
 
         // TODO send encoded key and IV
         
 
         // prepare data to send
-        msgSize = sizeof(EncryptedKeyMessage) + ciphertextSize + IV_SIZE;
+        msgSize = sizeof(EncryptedKeyMessage) + ciphertextSize;
         msg = (EncryptedKeyMessage*) g_malloc(msgSize);
         msg->encryptedKeySize = ciphertextSize;
-        msg->ivSize = IV_SIZE;
         memcpy(msg->encryptedKey, ciphertext, ciphertextSize);
         memcpy(msg->iv, iv, IV_SIZE);
 
@@ -749,6 +749,8 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
     
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (received public key: %s )\n", receivedPublicKey);
 
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (sended public key: %s )\n", publicKey);
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (encryptedKeySize: %d, ivSize: %d, msgSize %d )\n", msg->encryptedKeySize, IV_SIZE, msgSize);
 
         hka_set_protocol_state(buddy, INIT); 
         
@@ -760,7 +762,7 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
 }
 
 static void
-hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* msg) {
+hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
     
     /*
         //testmode!!
@@ -779,7 +781,39 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* msg) {
                 hka_show_protocol_failure_info(buddy);
         }
         
-    */ 
+    */
+        DataMessage* dataMsg; 
+        EncryptedKeyMessage* receivedMsg;
+        gsize decodedDataSize;
+        unsigned char* receivedKey;
+        int receivedKeySize;
+        unsigned char key[UC_PAK_KEY_SIZE];
+        const char* password;
+        
+        dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
+        receivedMsg = (EncryptedKeyMessage*) dataMsg->data;
+
+        receivedKey = (unsigned char*)malloc(receivedMsg->encryptedKeySize); // plaintext is no longer than ciphertext
+
+
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (encryptedKeySize: %d, msgSize: %d )\n", receivedMsg->encryptedKeySize, dataMsg->size);
+
+        // decrypt a public key with a password
+        password = hka_get_password(buddy);
+        password_to_key(password, key, UC_PAK_KEY_SIZE); 
+        receivedKeySize = decrypt_aes_256(receivedMsg->encryptedKey, receivedMsg->encryptedKeySize, key, receivedMsg->iv, receivedKey); 
+
+        // Add a NULL terminator. We are expecting printable text  
+        receivedKey[receivedKeySize] = '\0';
+        
+         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (received and encrypted public key: %s )\n", receivedKey);
+  
+
+        hka_set_protocol_state(buddy, INIT); 
+
+        g_free(dataMsg);
+        g_free(receivedKey);
+
 }
 
 
