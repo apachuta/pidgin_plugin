@@ -23,9 +23,13 @@
 #include <openssl/dh.h>
 #include <openssl/engine.h>
 #include <openssl/bn.h>
+#include <openssl/conf.h>
+#include <openssl/evp.h>
+#include <openssl/err.h>
 
 #include "libcaptcha.h"
 
+// const states
 const gchar SPECIAL_TAG = 126;
 
 const gchar INIT = 65;
@@ -37,6 +41,10 @@ const gchar UC_PAK_1 = 70;
 
 const gchar FINISHED = 80;
 
+// const values
+const int IV_SIZE = 128; // initialization vector size 
+
+// structures
 struct HumanKeyAgreementProtocol {
 
         //captcha
@@ -63,6 +71,12 @@ typedef struct __attribute__((__packed__)) {
         gchar data[0];
 } DataMessage;
 
+typedef struct __attribute__((__packed__)) {
+        gsize encryptedKeySize;
+        gchar encryptedKey[0];
+        gsize ivSize;
+        gchar iv[0];  
+} EncryptedKeyMessage;
 
 // ------------------------------------------------- crypto --------------------------------
 
@@ -74,10 +88,12 @@ void handleErrors() {
   purple_debug_misc("hka-plugin", "hmac_test (Errors)\n"); 
 }
 
-void create_diffie_hellman_object(DH** dh)
+void create_diffie_hellman_object(DH** dh, char* publicKey, char* privateKey)
 {
     BIGNUM* p = NULL;
     BIGNUM* g = NULL;
+    BIGNUM* priv = NULL;
+    BIGNUM* pub = NULL;
     char* gen;
 
     if(0 == (BN_dec2bn(&p, BIG_PRIME))) handleErrors();
@@ -86,6 +102,16 @@ void create_diffie_hellman_object(DH** dh)
     if(NULL == (*dh = DH_new())) handleErrors();
     (*dh)->p = p;
     (*dh)->g = g;
+    if(publicKey != NULL)
+    {
+        BN_dec2bn(&pub, publicKey);
+        (*dh)->pub_key = pub;   
+    }
+    if(privateKey != NULL)
+    {
+        BN_dec2bn(&priv, privateKey);
+        (*dh)->priv_key = priv;
+    }
 
     purple_debug_misc("hka-plugin", "create_diffie_hellman_object (created)\n"); 
     
@@ -98,7 +124,7 @@ void generate_diffie_hellman_keys(char** publicKey, char** privateKey)
 {
     DH* dh;
 
-    create_diffie_hellman_object(&dh);
+    create_diffie_hellman_object(&dh, NULL, NULL);
 
     /* Generate the public and private key pair */
     if(1 != DH_generate_key(dh)) handleErrors();
@@ -109,6 +135,25 @@ void generate_diffie_hellman_keys(char** publicKey, char** privateKey)
     OPENSSL_free(dh);
 }
 
+// return secrete size
+int generate_diffie_hellman_secret(char* receivedPublicKey, char* publicKey, char* privateKey, char** secret)
+{
+    DH* dh;
+    BIGNUM* receivedPublicKeyBN;
+    int secretSize;
+
+    create_diffie_hellman_object(&dh, publicKey, privateKey);
+  
+    BN_dec2bn(&receivedPublicKeyBN, receivedPublicKey);
+   
+    if(NULL == (*secret = OPENSSL_malloc(sizeof(unsigned char) * (DH_size(dh))))) handleErrors();
+
+    //zwraca wielkosc sekretu
+    if(0 > (secretSize = DH_compute_key(*secret, receivedPublicKeyBN, dh))) handleErrors();
+    
+    return secretSize;
+    
+}
 
 int hmac_vrfy(const void *key, int keySize, const unsigned char *msg, int msgSize,
                const unsigned char *tag, int tagSize) {
@@ -186,6 +231,124 @@ void hmac_test()
     
     OPENSSL_free(tag);
     
+}
+
+void openssl_init() 
+{
+  /* Initialise the library */
+  ERR_load_crypto_strings();
+  OpenSSL_add_all_algorithms();
+  OPENSSL_config(NULL);
+}
+
+void openssl_clean()
+{
+  EVP_cleanup();
+  ERR_free_strings();
+}
+
+int encrypt_aes_256(unsigned char *plaintext, int plaintext_len, unsigned char *key,
+    unsigned char *iv, unsigned char **ciphertext)
+{
+  EVP_CIPHER_CTX *ctx;
+
+  int len;
+
+  int ciphertext_len;
+
+  /* Create and initialise the context */
+  if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
+
+  /* Initialise the encryption operation. IMPORTANT - ensure you use a key
+   *    * and IV size appropriate for your cipher
+   *       * In this example we are using 256 bit AES (i.e. a 256 bit key). The
+   *          * IV size for *most* modes is the same as the block size. For AES this
+   *             * is 128 bits */
+  if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
+    handleErrors();
+
+  printf("block size: %d\n", EVP_CIPHER_CTX_block_size(ctx));
+
+  *ciphertext = (unsigned char*) malloc(plaintext_len + EVP_CIPHER_CTX_block_size(ctx));
+
+  /* Provide the message to be encrypted, and obtain the encrypted output.
+   *    * EVP_EncryptUpdate can be called multiple times if necessary
+   *       */
+  if(1 != EVP_EncryptUpdate(ctx, *ciphertext, &len, plaintext, plaintext_len))
+    handleErrors();
+  ciphertext_len = len;
+
+  printf("ciphertext len: %d\n", ciphertext_len);
+
+  /* Finalise the encryption. Further ciphertext bytes may be written at
+   *    * this stage.
+   *       */
+  if(1 != EVP_EncryptFinal_ex(ctx, *ciphertext + len, &len)) handleErrors();
+  ciphertext_len += len;
+
+  printf("padding len: %d\n", len);
+
+  /* Clean up */
+  EVP_CIPHER_CTX_free(ctx);
+
+  return ciphertext_len;
+}
+
+
+int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
+    unsigned char *iv, unsigned char *plaintext)
+{
+  EVP_CIPHER_CTX *ctx;
+
+  int len;
+
+  int plaintext_len;
+
+  /* Create and initialise the context */
+  if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
+
+  /* Initialise the decryption operation. IMPORTANT - ensure you use a key
+   *    * and IV size appropriate for your cipher
+   *       * In this example we are using 256 bit AES (i.e. a 256 bit key). The
+   *          * IV size for *most* modes is the same as the block size. For AES this
+   *             * is 128 bits */
+  if(1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
+    handleErrors();
+
+  /* Provide the message to be decrypted, and obtain the plaintext output.
+   *    * EVP_DecryptUpdate can be called multiple times if necessary
+   *       */
+  if(1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
+    handleErrors();
+  plaintext_len = len;
+
+  /* Finalise the decryption. Further plaintext bytes may be written at
+   *    * this stage.
+   *       */
+  if(1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len)) handleErrors();
+  plaintext_len += len;
+
+  /* Clean up */
+  EVP_CIPHER_CTX_free(ctx);
+
+  return plaintext_len;
+}
+
+void password_to_key(const char* password, unsigned char* key, int keySize)
+{
+        int i;
+        //initialize key array
+        for(i=0; i<keySize; i++)
+        {
+                if(i < strlen(password))
+                {
+                        key[i] = password[i];
+                }
+                else
+                {
+                        key[i] = '0';
+                }
+        }   
 }
 
 
@@ -354,6 +517,18 @@ hka_get_dh_private_key(PurpleBuddy* buddy)
         return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-dh-private-key"); 
 }
 
+static void
+hka_set_dh_received_key(PurpleBuddy* buddy, const gchar* key)
+{
+        purple_blist_node_set_string((PurpleBlistNode*) buddy, "hka-dh-received-key", key);
+}
+
+static const gchar*
+hka_get_dh_received_key(PurpleBuddy* buddy)
+{
+        return purple_blist_node_get_string((PurpleBlistNode*) buddy, "hka-dh-received-key"); 
+}
+
 
 static void
 hka_init_message(PurpleBuddy* buddy) 
@@ -483,25 +658,26 @@ hka_UC_PAK_step0(PurpleBuddy* buddy)
         char* publicKey;
         char* privateKey;
 
+        // generate DH keys
         generate_diffie_hellman_keys(&publicKey, &privateKey);
         
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step0 (pub key: %s )\n", publicKey);   
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step0 (priv key: %s )\n", privateKey);   
 
+        // set DH keys
         hka_set_dh_public_key(buddy, publicKey);
         hka_set_dh_private_key(buddy, privateKey);
 
-        // send dh public key
+        // send DH public key
         hka_send_text(buddy, UC_PAK_0, publicKey);
-        //hka_set_protocol_state(buddy, UC_PAK_1);
-        hka_set_protocol_state(buddy, INIT);
+        hka_set_protocol_state(buddy, UC_PAK_1);
         
         OPENSSL_free(privateKey);
         OPENSSL_free(publicKey);
 }
 
 static void
-hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* msg)
+hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
 {
     
     /*
@@ -524,9 +700,63 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* msg)
         }
         
     */    
+        char* publicKey;
+        char* privateKey;
+        const char* password;
+        /* A 128 bit IV */
+        unsigned char *iv = "01234567890123456";
+        unsigned char key[256];
+        unsigned char* ciphertext; 
+        int ciphertextSize;
+        EncryptedKeyMessage* msg;
+        int msgSize;
+
+        // generate DH keys
+        generate_diffie_hellman_keys(&publicKey, &privateKey);
+        
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (pub key: %s )\n", publicKey);   
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (priv key: %s )\n", privateKey);   
+
+        // set DH keys
+        hka_set_dh_public_key(buddy, publicKey);
+        hka_set_dh_private_key(buddy, privateKey);
+        hka_set_dh_received_key(buddy, receivedPublicKey);
+
+        // TODO generate a random IV
+
+        /* Initialise the library */
+        openssl_init();
+
+        // encode public key with password
+        password = hka_get_password(buddy);
+        password_to_key(password, key, 256);
+        ciphertextSize = encrypt_aes_256(publicKey, strlen(publicKey), key, iv, &ciphertext);
+
+        // TODO send encoded key and IV
+        
+
+        // prepare data to send
+        msgSize = sizeof(EncryptedKeyMessage) + ciphertextSize + IV_SIZE;
+        msg = (EncryptedKeyMessage*) g_malloc(msgSize);
+        msg->encryptedKeySize = ciphertextSize;
+        msg->ivSize = IV_SIZE;
+        memcpy(msg->encryptedKey, ciphertext, ciphertextSize);
+        memcpy(msg->iv, iv, IV_SIZE);
+
+        // send message
+        hka_send_data(buddy, UC_PAK_1, (gchar*)msg, msgSize); 
+
     
-        purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (received public key: %s )\n", msg);
-        hka_set_protocol_state(buddy, INIT);  
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (received public key: %s )\n", receivedPublicKey);
+
+
+        hka_set_protocol_state(buddy, INIT); 
+        
+        openssl_clean();  // ??
+        g_free(ciphertext);
+        g_free(publicKey);
+        g_free(privateKey);
+        g_free(msg);         
 }
 
 static void
@@ -775,11 +1005,9 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                 }          
                 else if(state == SEND_CAPTCHA_RESPONSE) {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (SEND_CAPTCHA_RESPONSE)\n");
-                        hka_show_captcha(msg->stringMsg, buddy);
-                        //hka_set_protocol_state(buddy, UC_PAK_0); // testmode !!! 
-
+                        hka_show_captcha(msg->stringMsg, buddy); 
                 }
-                else if(state == UC_PAK_0 ) {  //testmode !!!
+                else if(state == UC_PAK_0 ) { 
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (UC_PAK_0)\n");
 
                         if(hka_synchronized(buddy)) {
@@ -796,7 +1024,7 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                         }
 
                                         }
-                else if(state == UC_PAK_1 ) {  //testmode !!!
+                else if(state == UC_PAK_1 ) { 
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (UC_PAK_1)\n");
                         hka_UC_PAK_step2(buddy, msg->stringMsg); 
                 }
