@@ -88,7 +88,7 @@ void handleErrors() {
   purple_debug_misc("hka-plugin", "hmac_test (Errors)\n"); 
 }
 
-void create_diffie_hellman_object(DH** dh, char* publicKey, char* privateKey)
+void create_diffie_hellman_object(DH** dh, const char* publicKey, const char* privateKey)
 {
     BIGNUM* p = NULL;
     BIGNUM* g = NULL;
@@ -104,12 +104,12 @@ void create_diffie_hellman_object(DH** dh, char* publicKey, char* privateKey)
     (*dh)->g = g;
     if(publicKey != NULL)
     {
-        BN_dec2bn(&pub, publicKey);
+        if(0 == (BN_dec2bn(&pub, publicKey))) handleErrors();   
         (*dh)->pub_key = pub;   
     }
     if(privateKey != NULL)
     {
-        BN_dec2bn(&priv, privateKey);
+        if(0 == (BN_dec2bn(&priv, privateKey))) handleErrors();
         (*dh)->priv_key = priv;
     }
 
@@ -136,21 +136,29 @@ void generate_diffie_hellman_keys(char** publicKey, char** privateKey)
 }
 
 // return secrete size
-int generate_diffie_hellman_secret(char* receivedPublicKey, char* publicKey, char* privateKey, char** secret)
+int generate_diffie_hellman_secret(const char* receivedPublicKey, const char* publicKey, const char* privateKey, char** secret)
 {
     DH* dh;
-    BIGNUM* receivedPublicKeyBN;
+    BIGNUM* receivedPublicKeyBN = NULL;
     int secretSize;
-
+ 
     create_diffie_hellman_object(&dh, publicKey, privateKey);
-  
+
     BN_dec2bn(&receivedPublicKeyBN, receivedPublicKey);
-   
-    if(NULL == (*secret = OPENSSL_malloc(sizeof(unsigned char) * (DH_size(dh))))) handleErrors();
+  
+    purple_debug_misc("hka-plugin", "create_diffie_hellman_secret (DH_size(dh): %d)\n", DH_size(dh));
+    
+    
+    //*secret = (char*)malloc(256);
+
+    if(NULL == (*secret = (char*)malloc(sizeof(unsigned char) * (DH_size(dh))))) handleErrors();
 
     //zwraca wielkosc sekretu
     if(0 > (secretSize = DH_compute_key(*secret, receivedPublicKeyBN, dh))) handleErrors();
-    
+
+    OPENSSL_free(dh);
+    OPENSSL_free(receivedPublicKeyBN);
+
     return secretSize;
     
 }
@@ -789,7 +797,11 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         int receivedKeySize;
         unsigned char key[UC_PAK_KEY_SIZE];
         const char* password;
-        
+        char* secret;
+        int secretSize;
+        const char* publicKey;
+        const char* privateKey;
+
         dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
         receivedMsg = (EncryptedKeyMessage*) dataMsg->data;
 
@@ -806,8 +818,21 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         // Add a NULL terminator. We are expecting printable text  
         receivedKey[receivedKeySize] = '\0';
         
-         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (received and encrypted public key: %s )\n", receivedKey);
-  
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (received and encrypted public key: %s )\n", receivedKey);
+
+        // create DH secret
+        privateKey = hka_get_dh_private_key(buddy);
+        publicKey = hka_get_dh_public_key(buddy);
+
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (public key: %s )\n", publicKey);
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (private key: %s )\n", privateKey);
+        
+       
+
+        secretSize = generate_diffie_hellman_secret(receivedKey, publicKey, privateKey, &secret);
+ 
+        purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (secret size: %d )\n", secretSize);
+
 
         hka_set_protocol_state(buddy, INIT); 
 
