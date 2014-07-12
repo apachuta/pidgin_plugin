@@ -29,6 +29,11 @@
 
 #include "libcaptcha.h"
 
+#define TAG_SIZE 32
+#define IV_SIZE 16 // initialization vector size 
+#define UC_PAK_KEY_SIZE 32
+
+
 // const states
 const gchar SPECIAL_TAG = 126;
 
@@ -38,13 +43,11 @@ const gchar SEND_CAPTCHA = 67;
 const gchar SEND_CAPTCHA_RESPONSE = 68;
 const gchar UC_PAK_0 = 69;
 const gchar UC_PAK_1 = 70;
+const gchar COVERT_AKA_0 = 71;
+const gchar COVERT_AKA_1 = 72;
 
 const gchar FINISHED = 80;
-
-// const values
-const int IV_SIZE = 16; // initialization vector size 
-const int UC_PAK_KEY_SIZE = 32;
-
+ 
 // structures
 struct HumanKeyAgreementProtocol {
 
@@ -73,10 +76,18 @@ typedef struct __attribute__((__packed__)) {
 } DataMessage;
 
 typedef struct __attribute__((__packed__)) {
-        gchar iv[16];
+        gchar iv[IV_SIZE];
         gsize encryptedKeySize;
         gchar encryptedKey[0];  
 } EncryptedKeyMessage;
+
+typedef struct __attribute__((__packed__)) {
+        gchar tag[TAG_SIZE];
+        gchar publicKeySize;
+        gchar publicKey[0];
+} PublicKeyTagMessage;
+
+
 
 // ------------------------------------------------- crypto --------------------------------
 
@@ -85,7 +96,7 @@ char* BIG_PRIME = "2906160429505535342425388913503668614913761392844591057911054
 char* GENERATOR = "2";
 
 void handleErrors() {
-  purple_debug_misc("hka-plugin", "hmac_test (Errors)\n"); 
+  purple_debug_misc("hka-plugin", "(Errors)\n"); 
 }
 
 void create_diffie_hellman_object(DH** dh, const char* publicKey, const char* privateKey)
@@ -163,7 +174,7 @@ int generate_diffie_hellman_secret(const char* receivedPublicKey, const char* pu
     
 }
 
-int hmac_sha224_vrfy(const void *key, int keySize, const unsigned char *msg, int msgSize,
+int hmac_sha256_vrfy(const void *key, int keySize, const unsigned char *msg, int msgSize,
                const unsigned char *tag, int tagSize) {
   
   unsigned char* newTag;
@@ -172,7 +183,7 @@ int hmac_sha224_vrfy(const void *key, int keySize, const unsigned char *msg, int
   
   newTag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
   
-  if(NULL == HMAC(EVP_sha224(), key, keySize, msg, msgSize, newTag, &newTagSize)) handleErrors();
+  if(NULL == HMAC(EVP_sha256(), key, keySize, msg, msgSize, newTag, &newTagSize)) handleErrors();
   
   if(tagSize != newTagSize)
   {
@@ -191,20 +202,18 @@ int hmac_sha224_vrfy(const void *key, int keySize, const unsigned char *msg, int
 }
 
 
-void hmac_sha224(const char* key, int keySize, const char* data, int dataSize, char** tag, int* tagSize)
+void hmac_sha256(const char* key, int keySize, const char* data, int dataSize, char** tag, int* tagSize)
 {
     unsigned char* digest;
     
     *tag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
     
-    // Using sha1 hash engine here.
-    // You may use other hash engines. e.g EVP_md5(), EVP_sha224, EVP_sha512, etc
-    digest = HMAC(EVP_sha224(), key, keySize, (unsigned char*)data, dataSize, *tag, tagSize);    
+    // You may use other hash engines. e.g EVP_md5(), EVP_sha256, EVP_sha512, etc
+    digest = HMAC(EVP_sha256(), key, keySize, (unsigned char*)data, dataSize, *tag, tagSize);    
 
-    purple_debug_misc("hka-plugin", "hmac_sha224 (tag length: %d)\n", *tagSize);
+    purple_debug_misc("hka-plugin", "hmac_sha256 (tag length: %d)\n", *tagSize);
       
 }
-
 
 
 void hmac_test()
@@ -224,8 +233,8 @@ void hmac_test()
     tag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
     
     // Using sha1 hash engine here.
-    // You may use other hash engines. e.g EVP_md5(), EVP_sha224, EVP_sha512, etc
-    digest = HMAC(EVP_sha224(), key, strlen(key), (unsigned char*)data, strlen(data), tag, &taglen);    
+    // You may use other hash engines. e.g EVP_md5(), EVP_sha256, EVP_sha512, etc
+    digest = HMAC(EVP_sha256(), key, strlen(key), (unsigned char*)data, strlen(data), tag, &taglen);    
 
     purple_debug_misc("hka-plugin", "hmac_test (tag length: %d)\n", taglen);
     
@@ -245,7 +254,7 @@ void hmac_test()
     BIO_dump_fp(stdout, tag, taglen);
 */
 
-    if(hmac_sha224_vrfy(key, strlen(key), data, strlen(data), tag, taglen))
+    if(hmac_sha256_vrfy(key, strlen(key), data, strlen(data), tag, taglen))
     {
       purple_debug_misc("hka-plugin", "hmac_test (tag verification positive)\n");   
     }
@@ -777,7 +786,7 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (sended public key: %s )\n", publicKey);
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step1 (encryptedKeySize: %d, ivSize: %d, msgSize %d )\n", msg->encryptedKeySize, IV_SIZE, msgSize);
 
-        hka_set_protocol_state(buddy, INIT); 
+        hka_set_protocol_state(buddy, COVERT_AKA_0); 
         
         //openssl_clean();  // ??
         g_free(ciphertext);
@@ -823,6 +832,8 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         char* privateKey2;
         char* tag;
         int tagSize;
+        PublicKeyTagMessage* msg;
+        int msgSize;
 
         dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
         receivedMsg = (EncryptedKeyMessage*) dataMsg->data;
@@ -851,7 +862,7 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (private key: %s )\n", privateKey); 
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (secret size: %d )\n", secretSize);
 
-        // Covered AKA  ---------------------------------------------------------------------
+        // Covered AKA step 0 ---------------------------------------------------------------
 
         // generate new DH keys
         generate_diffie_hellman_keys(&publicKey2, &privateKey2);
@@ -864,9 +875,9 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         hka_set_dh_private_key(buddy, privateKey2);
 
         // create public key tag (with a DH secret as a key)
-        hmac_sha224(secret, secretSize, publicKey2, strlen(publicKey2), &tag, &tagSize);
+        hmac_sha256(secret, secretSize, publicKey2, strlen(publicKey2), &tag, &tagSize);
         
-        if(hmac_sha224_vrfy(secret, secretSize, publicKey2, strlen(publicKey2), tag, tagSize))
+        if(hmac_sha256_vrfy(secret, secretSize, publicKey2, strlen(publicKey2), tag, tagSize))
         {
               purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification positive)\n");   
         }
@@ -874,7 +885,17 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         {
              purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification negative)\n");
         }
-    
+
+        // prepare data to send
+        msgSize = sizeof(PublicKeyTagMessage) + strlen(publicKey2) + 1;  // null terminator
+        msg = (PublicKeyTagMessage*) g_malloc(msgSize);
+        msg->publicKeySize = strlen(publicKey2);
+        memcpy(msg->tag, tag, TAG_SIZE);
+        memcpy(msg->publicKey, publicKey2, strlen(publicKey2) + 1); 
+
+        // send message
+        hka_send_data(buddy, COVERT_AKA_0, (gchar*)msg, msgSize); 
+
 
         hka_set_protocol_state(buddy, INIT); 
 
@@ -885,7 +906,23 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         g_free(publicKey2);
 }
 
+void hka_covert_AKA_step1(PurpleBuddy* buddy, const gchar* stringMsg)
+{
+        DataMessage* dataMsg;
+        gsize decodedDataSize;
+        PublicKeyTagMessage* receivedMsg;
+        
+        dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
+        receivedMsg = (PublicKeyTagMessage*) dataMsg->data;
 
+        purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (received public key: %s )\n", receivedMsg->publicKey);
+ 
+}
+
+void hka_covert_AKA_step2(PurpleBuddy* buddy, const gchar* stringMsg)
+{
+
+}
 
 static void
 hka_captcha_cb(PurpleBuddy* buddy, const gchar* solution) 
@@ -1130,6 +1167,14 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
                 else if(state == UC_PAK_1 ) { 
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (UC_PAK_1)\n");
                         hka_UC_PAK_step2(buddy, msg->stringMsg); 
+                }
+                else if(state == COVERT_AKA_0 ) { 
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (COVERT_AKA_0)\n");
+                        hka_covert_AKA_step1(buddy, msg->stringMsg); 
+                }
+                else if(state == COVERT_AKA_1 ) { 
+                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (COVERT_AKA_1)\n");
+                        hka_covert_AKA_step2(buddy, msg->stringMsg); 
                 }
                 else if(state == FINISHED){
                         //decode and replace message
