@@ -83,7 +83,7 @@ typedef struct __attribute__((__packed__)) {
 
 typedef struct __attribute__((__packed__)) {
         gchar tag[TAG_SIZE];
-        gchar publicKeySize;
+        gsize publicKeySize;
         gchar publicKey[0];
 } PublicKeyTagMessage;
 
@@ -857,7 +857,7 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         privateKey = hka_get_dh_private_key(buddy);
         publicKey = hka_get_dh_public_key(buddy);       
         secretSize = generate_diffie_hellman_secret(receivedKey, publicKey, privateKey, &secret);
- 
+
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (public key: %s )\n", publicKey);
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (private key: %s )\n", privateKey); 
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (secret size: %d )\n", secretSize);
@@ -876,7 +876,7 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
 
         // create public key tag (with a DH secret as a key)
         hmac_sha256(secret, secretSize, publicKey2, strlen(publicKey2), &tag, &tagSize);
-        
+
         if(hmac_sha256_vrfy(secret, secretSize, publicKey2, strlen(publicKey2), tag, tagSize))
         {
               purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification positive)\n");   
@@ -904,6 +904,7 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
 
         g_free(privateKey2);
         g_free(publicKey2);
+        g_free(secret);
 }
 
 void hka_covert_AKA_step1(PurpleBuddy* buddy, const gchar* stringMsg)
@@ -911,17 +912,63 @@ void hka_covert_AKA_step1(PurpleBuddy* buddy, const gchar* stringMsg)
         DataMessage* dataMsg;
         gsize decodedDataSize;
         PublicKeyTagMessage* receivedMsg;
-        
+        const char* publicKey;
+        const char* privateKey;
+        const char* receivedKey;
+        char* secret;
+        int secretSize;
+        char* publicKey2;
+        char* privateKey2;
+        char* tag;
+        int tagSize;
+               
         dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
         receivedMsg = (PublicKeyTagMessage*) dataMsg->data;
 
         purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (received public key: %s )\n", receivedMsg->publicKey);
- 
+
+        // create DH secret
+        privateKey = hka_get_dh_private_key(buddy);
+        publicKey = hka_get_dh_public_key(buddy);
+        receivedKey = hka_get_dh_received_key(buddy);       
+        secretSize = generate_diffie_hellman_secret(receivedKey, publicKey, privateKey, &secret);
+
+        purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (secretSize: %d )\n", secretSize);
+
+        // generate new DH keys
+        generate_diffie_hellman_keys(&publicKey2, &privateKey2);
+        
+        purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (new pub key: %s )\n", publicKey2);   
+        purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (new priv key: %s )\n", privateKey2);   
+
+        // create public key tag (with a DH secret as a key)
+        hmac_sha256(secret, secretSize, publicKey2, strlen(publicKey2), &tag, &tagSize);
+        
+        // TODO send tag and PK2
+
+        if(hmac_sha256_vrfy(secret, secretSize, receivedMsg->publicKey, receivedMsg->publicKeySize, receivedMsg->tag, TAG_SIZE))
+        {
+              purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (tag verification positive (with received PK and my secret))\n");   
+        }
+        else
+        {
+             purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (tag verification negative (with received PK and my secret))\n");
+        }
+
+
+
+        hka_set_protocol_state(buddy, INIT); 
+        
+        
+        g_free(dataMsg);
+        g_free(privateKey2);
+        g_free(publicKey2);
+        g_free(secret);
 }
 
 void hka_covert_AKA_step2(PurpleBuddy* buddy, const gchar* stringMsg)
 {
-
+        hka_set_protocol_state(buddy, INIT); 
 }
 
 static void
