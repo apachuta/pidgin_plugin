@@ -87,6 +87,11 @@ typedef struct __attribute__((__packed__)) {
         gchar publicKey[0];
 } PublicKeyTagMessage;
 
+typedef struct __attribute__ ((__packed__)) {
+        gchar iv[IV_SIZE];
+        gsize encodedMsgSize;
+        gchar encodedMsg[0];
+} EncodedMessage;
 
 
 // ------------------------------------------------- crypto --------------------------------
@@ -281,8 +286,8 @@ void openssl_clean()
   ERR_free_strings();
 }
 
-int encrypt_aes_256(unsigned char *plaintext, int plaintext_len, unsigned char *key,
-    unsigned char *iv, unsigned char **ciphertext)
+int encrypt_aes_256(const unsigned char *plaintext, int plaintext_len, const unsigned char *key,
+    const unsigned char *iv, unsigned char **ciphertext)
 {
   EVP_CIPHER_CTX *ctx;
 
@@ -329,8 +334,8 @@ int encrypt_aes_256(unsigned char *plaintext, int plaintext_len, unsigned char *
 }
 
 
-int decrypt_aes_256(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
-    unsigned char *iv, unsigned char *plaintext)
+int decrypt_aes_256(const unsigned char *ciphertext, int ciphertext_len, const unsigned char *key,
+    const unsigned char *iv, unsigned char *plaintext)
 {
   EVP_CIPHER_CTX *ctx;
 
@@ -366,6 +371,58 @@ int decrypt_aes_256(unsigned char *ciphertext, int ciphertext_len, unsigned char
   EVP_CIPHER_CTX_free(ctx);
 
   return plaintext_len;
+}
+
+char* encode_aes_256(const char* key, const char* plaintext)
+{
+        unsigned char* ciphertext = NULL;
+        int ciphertextSize;
+        /* A 128 bit IV */
+        unsigned char *iv = "0123456789012345";
+        int msgSize;
+        EncodedMessage* msg;
+        char* encodedMsg;
+
+        // TODO generate a random IV
+
+        /* Initialise the library */  
+        openssl_init();  // TODO  ??
+
+        // encrypt
+        ciphertextSize = encrypt_aes_256(plaintext, strlen(plaintext), key, iv, &ciphertext);
+
+        // prepare msg
+        msgSize = sizeof(EncodedMessage) + ciphertextSize;
+        msg = (EncodedMessage*) g_malloc(msgSize);
+        msg->encodedMsgSize = ciphertextSize;
+        memcpy(msg->encodedMsg, ciphertext, ciphertextSize);
+        memcpy(msg->iv, iv, IV_SIZE);
+
+        // encode msg
+        encodedMsg = HKA.binary_to_text_encode((char*)msg, msgSize);
+
+        g_free(ciphertext);
+        g_free(msg);
+
+        return encodedMsg;
+}
+
+char* decode_aes_256(const char* key, const char* stringMsg)
+{
+        DataMessage* dataMsg;
+        gsize decodedDataSize;
+        EncodedMessage* receivedMsg;
+        char* plaintext;
+        int plaintextSize;
+        
+        receivedMsg = (EncodedMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
+
+        plaintext = (unsigned char*)malloc(receivedMsg->encodedMsgSize + 1); // plaintext is no longer than ciphertext
+
+        plaintextSize = decrypt_aes_256(receivedMsg->encodedMsg, receivedMsg->encodedMsgSize, key, receivedMsg->iv, plaintext);
+        plaintext[plaintextSize] = 0;
+
+        return plaintext;
 }
 
 void password_to_key(const char* password, unsigned char* key, int keySize)
@@ -682,15 +739,6 @@ hka_show_protocol_failure_info(PurpleBuddy* buddy)
 static void
 hka_UC_PAK_step0(PurpleBuddy* buddy) 
 {
-  /*
-        const gchar* password = hka_get_password(buddy);
-
-        //testmode!!
-        hka_send_text(buddy, UC_PAK_0, password);
-        hka_set_protocol_state(buddy, UC_PAK_1);
-
-  */
-
         char* publicKey;
         char* privateKey;
 
@@ -784,9 +832,6 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
         password = hka_get_password(buddy);
         password_to_key(password, key, UC_PAK_KEY_SIZE);
         ciphertextSize = encrypt_aes_256(publicKey, strlen(publicKey), key, iv, &ciphertext);
-
-        // TODO send encoded key and IV
-        
 
         // prepare data to send
         msgSize = sizeof(EncryptedKeyMessage) + ciphertextSize;
@@ -903,6 +948,7 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         if(hmac_sha256_vrfy(secret, secretSize, publicKey2, strlen(publicKey2), tag, tagSize))
         {
               purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification positive)\n");   
+              
         }
         else
         {
@@ -946,6 +992,9 @@ void hka_covert_AKA_step1(PurpleBuddy* buddy, const gchar* stringMsg)
         int tagSize;
         int msgSize;
         PublicKeyTagMessage* msg;
+        char* sessionKey;
+        int sessionKeySize;
+        char* encodedSessionKey;
                
         dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
         receivedMsg = (PublicKeyTagMessage*) dataMsg->data;
@@ -978,16 +1027,24 @@ void hka_covert_AKA_step1(PurpleBuddy* buddy, const gchar* stringMsg)
         // verify received message and tag with created secret
         if(hmac_sha256_vrfy(secret, secretSize, receivedMsg->publicKey, receivedMsg->publicKeySize, receivedMsg->tag, TAG_SIZE))
         {
-              purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (tag verification positive (with received PK and my secret))\n");   
+                purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (tag verification positive (with received PK and my secret))\n");   
+                
+                sessionKeySize = generate_diffie_hellman_secret(receivedMsg->publicKey, publicKey2, privateKey2, &sessionKey);
+                encodedSessionKey = HKA.binary_to_text_encode(sessionKey, sessionKeySize);
+                hka_set_session_key(buddy, encodedSessionKey);
+                hka_set_protocol_state(buddy, FINISHED);
+                hka_show_protocol_success_info(buddy);
+         
+                g_free(sessionKey);
+                g_free(encodedSessionKey);
+
         }
         else
         {
-             purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (tag verification negative (with received PK and my secret))\n");
+                purple_debug_misc("hka-plugin", "hka_covert_AKA_step1 (tag verification negative (with received PK and my secret))\n");
+                hka_set_protocol_state(buddy, INIT);
+                hka_show_protocol_failure_info(buddy);
         }
-
-
-
-        hka_set_protocol_state(buddy, INIT); 
         
         
         g_free(dataMsg);
@@ -995,7 +1052,7 @@ void hka_covert_AKA_step1(PurpleBuddy* buddy, const gchar* stringMsg)
         g_free(publicKey2);
         g_free(secret);
         g_free(msg);
-}
+        }
 
 void hka_covert_AKA_step2(PurpleBuddy* buddy, const gchar* stringMsg)
 {
@@ -1005,6 +1062,11 @@ void hka_covert_AKA_step2(PurpleBuddy* buddy, const gchar* stringMsg)
         const char* encodedSecret;
         char* secret;
         gsize secretSize;
+        char* sessionKey;
+        int sessionKeySize;
+        char* encodedSessionKey;
+        const char* publicKey;
+        const char* privateKey;
 
         dataMsg = (DataMessage*) HKA.text_to_binary_decode(stringMsg, &decodedDataSize);
         receivedMsg = (PublicKeyTagMessage*) dataMsg->data;
@@ -1018,18 +1080,29 @@ void hka_covert_AKA_step2(PurpleBuddy* buddy, const gchar* stringMsg)
         // verify received message and tag with created secret
         if(hmac_sha256_vrfy(secret, secretSize, receivedMsg->publicKey, receivedMsg->publicKeySize, receivedMsg->tag, TAG_SIZE))
         {
-              purple_debug_misc("hka-plugin", "hka_covert_AKA_step2 (tag verification positive (with received PK and my secret))\n");   
+                purple_debug_misc("hka-plugin", "hka_covert_AKA_step2 (tag verification positive (with received PK and my secret))\n");
+                
+                publicKey = hka_get_dh_public_key(buddy);
+                privateKey = hka_get_dh_private_key(buddy);
+ 
+                sessionKeySize = generate_diffie_hellman_secret(receivedMsg->publicKey, publicKey, privateKey, &sessionKey);
+                encodedSessionKey = HKA.binary_to_text_encode(sessionKey, sessionKeySize);
+                hka_set_session_key(buddy, encodedSessionKey);
+                hka_set_protocol_state(buddy, FINISHED);
+                hka_show_protocol_success_info(buddy);
+
+                g_free(sessionKey);
+                g_free(encodedSessionKey);
         }
         else
         {
-             purple_debug_misc("hka-plugin", "hka_covert_AKA_step2 (tag verification negative (with received PK and my secret))\n");
-        }
-
-        hka_set_protocol_state(buddy, INIT); 
+                purple_debug_misc("hka-plugin", "hka_covert_AKA_step2 (tag verification negative (with received PK and my secret))\n");
+                hka_set_protocol_state(buddy, INIT);
+                hka_show_protocol_failure_info(buddy);
+        } 
 
         g_free(secret);
         g_free(dataMsg);
-
 }
 
 static void
@@ -1318,9 +1391,15 @@ hka_start_protocol_cb(PurpleBlistNode* node, gpointer data)
                           state);
 
         if(state == INIT)
+        {
                 hka_init_message((PurpleBuddy*) node);
+        }
         else if(state == FINISHED) 
-                purple_debug_misc("hka-plugin", "hka_start_protocol_cb (state FINISHED, key = %s)\n", hka_get_key((PurpleBuddy*) node));
+        {
+                  purple_debug_misc("hka-plugin", "hka_start_protocol_cb (state FINISHED, session key = %s)\n", hka_get_session_key((PurpleBuddy*) node));
+                  // TODO wyswitlic powiadomienie czy zaczac jeszcze raz
+        }
+        // TODO else ?
 }
  
 
@@ -1352,14 +1431,18 @@ hka_initialize_buddy_variables(PurpleBlistNode* node)
 
         if(PURPLE_BLIST_NODE_IS_BUDDY(node)) {
 
-                if(hka_get_key((PurpleBuddy*) node) == "") {      
+                if(hka_get_session_key((PurpleBuddy*) node) == NULL) 
+                {      
                         hka_set_protocol_state((PurpleBuddy*) node, INIT);
                 }
                 else {
-                        hka_set_protocol_state((PurpleBuddy*) node, INIT ); //FINISHED);  <-- TODO
+                        hka_set_protocol_state((PurpleBuddy*) node, INIT); //FINISHED); TODO
+                        
                 }
                  
                 hka_set_synchronized((PurpleBuddy*) node, FALSE); 
+
+                //hka_set_session_key((PurpleBuddy*) node, NULL);
         }
 
         hka_initialize_buddy_variables(purple_blist_node_next(node, TRUE));
@@ -1400,8 +1483,8 @@ plugin_load(PurplePlugin *plugin)
         HKA.binary_to_text_encode = g_base64_encode;
         HKA.text_to_binary_decode = g_base64_decode;
         HKA.create_captcha = create_captcha;
-        HKA.encode = simple_encode;
-        HKA.decode = simple_decode;
+        HKA.encode = encode_aes_256; //simple_encode;
+        HKA.decode = decode_aes_256; //simple_decode;
 
         hka_initialize_buddy_variables(purple_blist_get_root());
 
