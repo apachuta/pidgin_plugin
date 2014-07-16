@@ -624,8 +624,17 @@ hka_get_dh_secret(PurpleBuddy* buddy)
 
 
 static void
+hka_reset_variables(PurpleBuddy* buddy)
+{
+        hka_set_synchronized(buddy, FALSE); 
+
+        //hka_set_session_key((PurpleBuddy*) node, NULL);
+}
+
+static void
 hka_init_message(PurpleBuddy* buddy) 
 {
+        hka_reset_variables(buddy);
         hka_send_text(buddy, INIT, " Nie masz mojego super pluginu :(");
         hka_set_protocol_state(buddy, INIT_RESPONSE);
 
@@ -636,6 +645,7 @@ hka_init_message(PurpleBuddy* buddy)
 static void
 hka_init_message_response(PurpleBuddy* buddy) 
 {
+        hka_reset_variables(buddy);
         hka_send_text(buddy, INIT_RESPONSE, " ");
         hka_set_protocol_state(buddy, SEND_CAPTCHA);
 
@@ -732,6 +742,38 @@ hka_show_protocol_failure_info(PurpleBuddy* buddy)
         hka_show_info(primaryInfo, NULL);
 
         g_free(primaryInfo);
+}
+
+static void 
+hka_show_reset_confirmation(PurpleBuddy* buddy)
+{
+        PurplePlugin* plugin;
+        const gchar* buddyName = purple_buddy_get_alias(buddy);
+        char* primaryInfo = g_strdup_printf("The connection with %s has already been secure. Do you want to establish a secure key again?", buddyName);
+
+        plugin = purple_plugins_find_with_id("core-apachuta-hka");
+  
+        purple_debug_misc("hka-plugin", "hka_show_reset_confirmation (primaryInfo = %s)\n", primaryInfo);
+
+        purple_request_action ( 
+        plugin, // handle
+        "Human Key Agreement", // title
+        primaryInfo, // primary
+        NULL, // secondary
+        0, // default action index
+        NULL, // PurpleAccount
+        "Qwerty", // the username of the buddy associated with the reqest (char*)
+        NULL, // PurpleConversation
+        buddy, // data to pass to the callback
+        2, // number of actions
+        _("_OK"), // action
+        G_CALLBACK(hka_init_message),  // callback
+        _("_Cancel"), //action2
+        NULL //callback2
+        ); 
+
+        g_free(primaryInfo);
+
 }
 
 // Universally-Composable Password Authenticated Key Exchange UC-PAK
@@ -1310,12 +1352,16 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
 
         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (beggining, hka-protocol-state = %c, msg->id = %c, strlen(*buffer) = %d, password = %s)\n", state, msg->id, strlen(*buffer), hka_get_password(buddy)); 
 
+        // you can start a protocol in any state
+        if(msg->tag == SPECIAL_TAG && msg->id == INIT) {
+                purple_debug_misc("hka-plugin", "receiving_im_msg_cb (INIT)\n");
+                hka_init_message_response(buddy); 
+                return TRUE; // do not display the message
+        }
+                
         if(msg->tag == SPECIAL_TAG && msg->id == state) {
-                if(state == INIT) {
-                        purple_debug_misc("hka-plugin", "receiving_im_msg_cb (INIT)\n");
-                        hka_init_message_response(buddy); 
-                }
-                else if(state == INIT_RESPONSE) {
+                
+                if(state == INIT_RESPONSE) {
                         purple_debug_misc("hka-plugin", "receiving_im_msg_cb (INIT_RESPONSE)\n");
                         hka_send_captcha(buddy); 
                 }
@@ -1370,8 +1416,14 @@ receiving_im_msg_cb(PurpleAccount *account, char **sender, char **buffer,
 
                 return TRUE;
         }
-
+        
+        // Ignore invalid message
+        if(msg->tag == SPECIAL_TAG && msg->id != state) {
+                 purple_debug_misc("hka-plugin", "receiving_im_msg_cb (invalid, waiting for: %c, received: %c)\n", state, msg->id); 
+                 return TRUE; //do not display the message
+        }
          
+        // display normal message (not from the protocol)
         return FALSE;
 }
 
@@ -1381,25 +1433,26 @@ static void
 hka_start_protocol_cb(PurpleBlistNode* node, gpointer data)
 {
         gchar state; 
+        PurpleBuddy* buddy;
 
         if(!PURPLE_BLIST_NODE_IS_BUDDY(node))
                 return;
 
-        state = hka_get_protocol_state((PurpleBuddy*) node);
+        buddy = (PurpleBuddy*) node;
+        state = hka_get_protocol_state(buddy);
 
         purple_debug_misc("hka-plugin", "hka_start_protocol_cb (hka-protocol-state = %c)\n", 
                           state);
-
-        if(state == INIT)
+ 
+        if(state == FINISHED) 
         {
-                hka_init_message((PurpleBuddy*) node);
+                  purple_debug_misc("hka-plugin", "hka_start_protocol_cb (state FINISHED, session key = %s)\n", hka_get_session_key(buddy));
+                  hka_show_reset_confirmation(buddy);
         }
-        else if(state == FINISHED) 
+        else // state == INIT or other
         {
-                  purple_debug_misc("hka-plugin", "hka_start_protocol_cb (state FINISHED, session key = %s)\n", hka_get_session_key((PurpleBuddy*) node));
-                  // TODO wyswitlic powiadomienie czy zaczac jeszcze raz
+                hka_init_message(buddy);
         }
-        // TODO else ?
 }
  
 
@@ -1425,24 +1478,23 @@ static void
 hka_initialize_buddy_variables(PurpleBlistNode* node) 
 {
         gchar state;
+        PurpleBuddy* buddy;
 
         if(node == NULL)
                 return;
 
         if(PURPLE_BLIST_NODE_IS_BUDDY(node)) {
+                buddy = (PurpleBuddy*) node;
 
-                if(hka_get_session_key((PurpleBuddy*) node) == NULL) 
+                if(hka_get_session_key(buddy) == NULL) 
                 {      
-                        hka_set_protocol_state((PurpleBuddy*) node, INIT);
+                        hka_set_protocol_state(buddy, INIT);
                 }
                 else {
-                        hka_set_protocol_state((PurpleBuddy*) node, INIT); //FINISHED); TODO
-                        
+                        hka_set_protocol_state(buddy, FINISHED);
                 }
                  
-                hka_set_synchronized((PurpleBuddy*) node, FALSE); 
-
-                //hka_set_session_key((PurpleBuddy*) node, NULL);
+                hka_reset_variables(buddy);        
         }
 
         hka_initialize_buddy_variables(purple_blist_node_next(node, TRUE));
