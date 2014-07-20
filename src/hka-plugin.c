@@ -288,6 +288,7 @@ void openssl_clean()
   ERR_free_strings();
 }
 
+// h = H(iv || password)
 BIGNUM* create_key_hash(const char* password, const unsigned char* iv)
 {
         char* key;
@@ -359,12 +360,18 @@ void decrypt_mul(const char* ciphertext, int ciphertextSize, const char* passwor
 
         if(0 == BN_dec2bn(&bigPrimeBN, BIG_PRIME)) handleErrors();
 
+        purple_debug_misc("hka-plugin", "decrypt_mul (start compute inverse)\n");
+
+        // compute inverse
         ctx = BN_CTX_new();
         if(0 == (inverseBN = BN_mod_inverse(NULL, hashBN, bigPrimeBN, ctx))) handleErrors();
+
+        purple_debug_misc("hka-plugin", "decrypt_mul (inverse computed)\n");
 
         ctx2 = BN_CTX_new();
         plaintextBN = BN_new();
 
+        // divide by the hash
         if(0 == BN_mod_mul(plaintextBN, ciphertextBN, inverseBN, bigPrimeBN, ctx2)) handleErrors();
 
         *plaintextDec = BN_bn2dec(plaintextBN);
@@ -375,6 +382,7 @@ void decrypt_mul(const char* ciphertext, int ciphertextSize, const char* passwor
         OPENSSL_free(hashBN);
         OPENSSL_free(plaintextBN);
         OPENSSL_free(bigPrimeBN);
+        OPENSSL_free(inverseBN);
 }
 
 
