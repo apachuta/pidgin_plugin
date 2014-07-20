@@ -26,12 +26,14 @@
 #include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
+#include <openssl/sha.h>
 
 #include "libcaptcha.h"
 
 #define TAG_SIZE 32
 #define IV_SIZE 16 // initialization vector size 
 #define UC_PAK_KEY_SIZE 32
+#define HASH_SIZE 32 // sha256
 
 
 // const states
@@ -285,6 +287,97 @@ void openssl_clean()
   EVP_cleanup();
   ERR_free_strings();
 }
+
+BIGNUM* create_key_hash(const char* password, const unsigned char* iv)
+{
+        char* key;
+        int keySize;
+        char hash[HASH_SIZE];
+        BIGNUM* hashBN = NULL;
+ 
+        keySize = IV_SIZE + strlen(password);
+        key = OPENSSL_malloc(keySize);
+        memcpy(key, iv, IV_SIZE);
+        memcpy(key + IV_SIZE, password, strlen(password));
+                           
+        SHA256(key, keySize, hash);
+
+        if(0 == (hashBN = BN_bin2bn(hash, HASH_SIZE, NULL))) handleErrors();
+        
+        OPENSSL_free(key); 
+
+        return hashBN;
+}
+
+int encrypt_mul(const unsigned char* plaintext, const char* password, const unsigned char *iv, unsigned char **ciphertext)
+{
+        BIGNUM* hashBN = NULL;
+        BIGNUM* plaintextBN = NULL;
+        BIGNUM* bigPrimeBN = NULL;
+        BN_CTX* ctx = NULL;
+        BIGNUM* ciphertextBN = NULL;
+        int ciphertextSize;
+
+        hashBN = create_key_hash(password, iv);
+
+        if(0 == BN_dec2bn(&plaintextBN, plaintext)) handleErrors();
+
+        if(0 == BN_dec2bn(&bigPrimeBN, BIG_PRIME)) handleErrors();
+
+        ctx = BN_CTX_new();
+        ciphertextBN = BN_new();
+
+        if(0 == BN_mod_mul(ciphertextBN, plaintextBN, hashBN, bigPrimeBN, ctx)) handleErrors();
+
+        *ciphertext = malloc(BN_num_bytes(ciphertextBN));
+
+        if(0 == (ciphertextSize = BN_bn2bin(ciphertextBN, *ciphertext)) ) handleErrors();
+
+        BN_CTX_free(ctx);
+        OPENSSL_free(ciphertextBN); 
+        OPENSSL_free(hashBN);
+        OPENSSL_free(plaintextBN);
+        OPENSSL_free(bigPrimeBN);
+
+        return ciphertextSize;
+}
+
+void decrypt_mul(const char* ciphertext, int ciphertextSize, const char* password, const char* iv, char** plaintextDec) 
+{
+        BIGNUM* hashBN = NULL;
+        BIGNUM* ciphertextBN = NULL;
+        BIGNUM* bigPrimeBN = NULL;
+        BN_CTX* ctx = NULL;
+        BN_CTX* ctx2 = NULL;
+        BIGNUM* plaintextBN = NULL;
+        BIGNUM* inverseBN = NULL;
+        int plaintextSize;
+
+        hashBN = create_key_hash(password, iv);
+
+        if(0 == (ciphertextBN = BN_bin2bn(ciphertext, ciphertextSize, NULL))) handleErrors(); 
+
+        if(0 == BN_dec2bn(&bigPrimeBN, BIG_PRIME)) handleErrors();
+
+        ctx = BN_CTX_new();
+        if(0 == (inverseBN = BN_mod_inverse(NULL, hashBN, bigPrimeBN, ctx))) handleErrors();
+
+        ctx2 = BN_CTX_new();
+        plaintextBN = BN_new();
+
+        if(0 == BN_mod_mul(plaintextBN, ciphertextBN, inverseBN, bigPrimeBN, ctx2)) handleErrors();
+
+        *plaintextDec = BN_bn2dec(plaintextBN);
+        
+        BN_CTX_free(ctx);
+        BN_CTX_free(ctx2);
+        OPENSSL_free(ciphertextBN); 
+        OPENSSL_free(hashBN);
+        OPENSSL_free(plaintextBN);
+        OPENSSL_free(bigPrimeBN);
+}
+
+
 
 int encrypt_aes_256(const unsigned char *plaintext, int plaintext_len, const unsigned char *key,
     const unsigned char *iv, unsigned char **ciphertext)
@@ -872,8 +965,11 @@ hka_UC_PAK_step1(PurpleBuddy* buddy, const gchar* receivedPublicKey)
 
         // encrypt public key with password
         password = hka_get_password(buddy);
-        password_to_key(password, key, UC_PAK_KEY_SIZE);
-        ciphertextSize = encrypt_aes_256(publicKey, strlen(publicKey), key, iv, &ciphertext);
+        
+        ciphertextSize = encrypt_mul(publicKey, password, iv, &ciphertext);
+ 
+        //password_to_key(password, key, UC_PAK_KEY_SIZE);
+        //ciphertextSize = encrypt_aes_256(publicKey, strlen(publicKey), key, iv, &ciphertext);
 
         // prepare data to send
         msgSize = sizeof(EncryptedKeyMessage) + ciphertextSize;
@@ -926,7 +1022,7 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
         DataMessage* dataMsg; 
         EncryptedKeyMessage* receivedMsg;
         gsize decodedDataSize;
-        unsigned char* receivedKey;
+        char* receivedKey;
         int receivedKeySize;
         unsigned char key[UC_PAK_KEY_SIZE];
         const char* password;
@@ -953,11 +1049,14 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg) {
 
         // decrypt a public key with a password
         password = hka_get_password(buddy);
-        password_to_key(password, key, UC_PAK_KEY_SIZE); 
-        receivedKeySize = decrypt_aes_256(receivedMsg->encryptedKey, receivedMsg->encryptedKeySize, key, receivedMsg->iv, receivedKey); 
+        
+        decrypt_mul(receivedMsg->encryptedKey, receivedMsg->encryptedKeySize, password, receivedMsg->iv, &receivedKey); 
+
+        //password_to_key(password, key, UC_PAK_KEY_SIZE); 
+        //receivedKeySize = decrypt_aes_256(receivedMsg->encryptedKey, receivedMsg->encryptedKeySize, key, receivedMsg->iv, receivedKey); 
 
         // Add a NULL terminator. We are expecting printable text  
-        receivedKey[receivedKeySize] = '\0';
+        //receivedKey[receivedKeySize] = '\0';
         
         purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (received and encrypted public key: %s )\n", receivedKey);
 
