@@ -31,6 +31,8 @@
 
 #include "libcaptcha.h"
 
+#define CHECK(x) if(0 == (x)) { error_msg( #x, __FILE__, __LINE__ );}
+
 #define TAG_SIZE 32
 #define IV_SIZE 16 // initialization vector size 
 #define HASH_SIZE 32 // sha256
@@ -47,7 +49,6 @@ const gchar UC_PAK_0 = 69;
 const gchar UC_PAK_1 = 70;
 const gchar COVERT_AKA_0 = 71;
 const gchar COVERT_AKA_1 = 72;
-
 const gchar FINISHED = 80;
  
 // structures
@@ -112,247 +113,248 @@ typedef struct __attribute__ ((__packed__)) {
 } EncodedMessage;
 
 
+void error_msg(const char* arg, const char* file, int line)
+{
+        purple_debug_error("hka-plugin", "(Error: %s, line %d, %s)\n", file, line, arg); 
+}
+
 // ------------------------------------------------- crypto --------------------------------
 
 char* BIG_PRIME = "29061604295055353424253889135036686149137613928445910579110547029313875439718550350988053475571612683327323345153327231211393015249645532776256400727289966400641306957507901234746498758025182038940679671682664254797692666182679379869976683486935708929913042514460763209045932503591749324455446799953688622329144696410730884066597340564332192788178741520134107078162110726238941776579522198478030817552964465684161208914242979565336565429929254106908575535379162804359248056067569743805576755474787518182630886631992744331412503393707482996568555663026991098873069831574888407838245872758683738640476645977988673820659";
 
 char* GENERATOR = "2";
 
-void handleErrors() {
-  purple_debug_misc("hka-plugin", "(Errors)\n"); 
-}
-
 void create_diffie_hellman_object(DH** dh, const char* publicKey, const char* privateKey)
 {
-    BIGNUM* p = NULL;
-    BIGNUM* g = NULL;
-    BIGNUM* priv = NULL;
-    BIGNUM* pub = NULL;
-    char* gen;
+        BIGNUM* p = NULL;
+        BIGNUM* g = NULL;
+        BIGNUM* priv = NULL;
+        BIGNUM* pub = NULL;
+        char* gen;
 
-    if(0 == (BN_dec2bn(&p, BIG_PRIME))) handleErrors();
-    if(0 == (BN_dec2bn(&g, GENERATOR))) handleErrors();
- 
-    if(NULL == (*dh = DH_new())) handleErrors();
-    (*dh)->p = p;
-    (*dh)->g = g;
-    if(publicKey != NULL)
-    {
-        if(0 == (BN_dec2bn(&pub, publicKey))) handleErrors();   
-        (*dh)->pub_key = pub;   
-    }
-    if(privateKey != NULL)
-    {
-        if(0 == (BN_dec2bn(&priv, privateKey))) handleErrors();
-        (*dh)->priv_key = priv;
-    }
+        CHECK( BN_dec2bn(&p, BIG_PRIME) );
+        CHECK( BN_dec2bn(&g, GENERATOR) );
+     
+        CHECK( *dh = DH_new() );
+        (*dh)->p = p;
+        (*dh)->g = g;
+        if(publicKey != NULL)
+        {
+                CHECK( BN_dec2bn(&pub, publicKey) ); 
+                (*dh)->pub_key = pub;   
+        }
+        if(privateKey != NULL)
+        {
+                CHECK( BN_dec2bn(&priv, privateKey) );
+                (*dh)->priv_key = priv;
+        }
 
-    purple_debug_misc("hka-plugin", "create_diffie_hellman_object (created)\n"); 
-    
-    gen = BN_bn2dec((*dh)->g);
-    purple_debug_misc("hka-plugin", "create_diffie_hellman_object (generator: %s)\n", gen);
-    OPENSSL_free(gen);  
+        purple_debug_misc("hka-plugin", "create_diffie_hellman_object (created)\n"); 
+        
+        gen = BN_bn2dec((*dh)->g);
+        purple_debug_misc("hka-plugin", "create_diffie_hellman_object (generator: %s)\n", gen);
+        OPENSSL_free(gen);  
 }
 
 void generate_diffie_hellman_keys(char** publicKey, char** privateKey)
 {
-    DH* dh;
+        DH* dh;
 
-    create_diffie_hellman_object(&dh, NULL, NULL);
+        create_diffie_hellman_object(&dh, NULL, NULL);
 
-    /* Generate the public and private key pair */
-    if(1 != DH_generate_key(dh)) handleErrors();
-    
-    *publicKey = BN_bn2dec(dh->pub_key);
-    *privateKey = BN_bn2dec(dh->priv_key); 
+        /* Generate the public and private key pair */
+        CHECK( DH_generate_key(dh) );
+        
+        *publicKey = BN_bn2dec(dh->pub_key);
+        *privateKey = BN_bn2dec(dh->priv_key); 
 
-    OPENSSL_free(dh);
+        OPENSSL_free(dh);
 }
 
 // return secrete size
 int generate_diffie_hellman_secret(const char* receivedPublicKey, const char* publicKey, const char* privateKey, char** secret)
 {
-    DH* dh;
-    BIGNUM* receivedPublicKeyBN = NULL;
-    int secretSize;
- 
-    create_diffie_hellman_object(&dh, publicKey, privateKey);
+        DH* dh;
+        BIGNUM* receivedPublicKeyBN = NULL;
+        int secretSize;
+     
+        create_diffie_hellman_object(&dh, publicKey, privateKey);
 
-    BN_dec2bn(&receivedPublicKeyBN, receivedPublicKey);
-  
-    purple_debug_misc("hka-plugin", "create_diffie_hellman_secret (DH_size(dh): %d)\n", DH_size(dh));
-    
-    
-    //*secret = (char*)malloc(256);
+        BN_dec2bn(&receivedPublicKeyBN, receivedPublicKey);
+      
+        purple_debug_misc("hka-plugin", "create_diffie_hellman_secret (DH_size(dh): %d)\n", DH_size(dh));
+        
+        
+        //*secret = (char*)malloc(256);
 
-    if(NULL == (*secret = (char*)malloc(sizeof(unsigned char) * (DH_size(dh))))) handleErrors();
+        CHECK( *secret = (char*)malloc(sizeof(unsigned char) * (DH_size(dh))) );
 
-    //zwraca wielkosc sekretu
-    if(0 > (secretSize = DH_compute_key(*secret, receivedPublicKeyBN, dh))) handleErrors();
+        //zwraca wielkosc sekretu
+        CHECK( secretSize = DH_compute_key(*secret, receivedPublicKeyBN, dh) );
 
-    OPENSSL_free(dh);
-    OPENSSL_free(receivedPublicKeyBN);
+        OPENSSL_free(dh);
+        OPENSSL_free(receivedPublicKeyBN);
 
-    return secretSize;
-    
+        return secretSize;
+        
 }
 
 int hmac_sha256_vrfy(const void *key, int keySize, const unsigned char *msg, int msgSize,
                const unsigned char *tag, int tagSize) {
   
-    unsigned char* newTag;
-    int newTagSize;
-    int i;
-  
-    newTag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
-  
-    if(NULL == HMAC(EVP_sha256(), key, keySize, msg, msgSize, newTag, &newTagSize)) handleErrors();
-  
-    if(tagSize != newTagSize)
-    {
-        return 0;   
-    }
-  
-    for(i=0; i< tagSize; i++)
-    {
-        if(tag[i] != newTag[i])
+        unsigned char* newTag;
+        int newTagSize;
+        int i;
+      
+        newTag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
+      
+        CHECK( HMAC(EVP_sha256(), key, keySize, msg, msgSize, newTag, &newTagSize) );
+      
+        if(tagSize != newTagSize)
         {
-          return 0;
+                return 0;   
         }
-  }
-    
-  return 1;
+      
+        for(i=0; i< tagSize; i++)
+        {
+                if(tag[i] != newTag[i])
+                {
+                      return 0;
+                }
+        }
+        
+        return 1;
 }
 
 
 void hmac_sha256(const char* key, int keySize, const char* data, int dataSize, char** tag, int* tagSize)
 {
-    unsigned char* digest;
-    
-    *tag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
-    
-    // You may use other hash engines. e.g EVP_md5(), EVP_sha256, EVP_sha512, etc
-    digest = HMAC(EVP_sha256(), key, keySize, (unsigned char*)data, dataSize, *tag, tagSize);    
+        unsigned char* digest;
+        
+        *tag = OPENSSL_malloc(sizeof(unsigned char) * EVP_MAX_MD_SIZE);
+        
+        // You may use other hash engines. e.g EVP_md5(), EVP_sha256, EVP_sha512, etc
+        digest = HMAC(EVP_sha256(), key, keySize, (unsigned char*)data, dataSize, *tag, tagSize);    
 
-    purple_debug_misc("hka-plugin", "hmac_sha256 (tag length: %d)\n", *tagSize);
-      
+        purple_debug_misc("hka-plugin", "hmac_sha256 (tag length: %d)\n", *tagSize);
+          
 }
 
 
 void rand_bytes(char* buf, int num)
 {
-    if(0 == RAND_bytes(buf, num)) handleErrors();
+        CHECK( RAND_bytes(buf, num) );
 }
 
 void openssl_init()
 {
-    // Initialise the library
-    ERR_load_crypto_strings();
-    OpenSSL_add_all_algorithms();
-    OPENSSL_config(NULL);
+        // Initialise the library
+        ERR_load_crypto_strings();
+        OpenSSL_add_all_algorithms();
+        OPENSSL_config(NULL);
 }
 
 void openssl_clean()
 {
-    EVP_cleanup();
-    ERR_free_strings();
+        EVP_cleanup();
+        ERR_free_strings();
 }
 
 // h = H( iv || password)
 BIGNUM* create_key_hash(const char* password, const unsigned char* iv)
 {
-    char* key;
-    int keySize;
-    char hash[HASH_SIZE];
-    BIGNUM* hashBN = NULL;
+        char* key;
+        int keySize;
+        char hash[HASH_SIZE];
+        BIGNUM* hashBN = NULL;
 
-    keySize = IV_SIZE + strlen(password);
-    key = OPENSSL_malloc(keySize);
-    memcpy(key, iv, IV_SIZE);
-    memcpy(key + IV_SIZE, password, strlen(password));
+        keySize = IV_SIZE + strlen(password);
+        key = OPENSSL_malloc(keySize);
+        memcpy(key, iv, IV_SIZE);
+        memcpy(key + IV_SIZE, password, strlen(password));
 
-    SHA256(key, keySize, hash);
+        SHA256(key, keySize, hash);
 
-    if(0 == (hashBN = BN_bin2bn(hash, HASH_SIZE, NULL))) handleErrors();
+        CHECK( hashBN = BN_bin2bn(hash, HASH_SIZE, NULL) );
 
-    OPENSSL_free(key); 
+        OPENSSL_free(key); 
 
-    return hashBN;
+        return hashBN;
 }
 
 int encrypt_mul(const unsigned char* plaintext, const char* password, const unsigned char *iv, unsigned char **ciphertext)
 {
-    BIGNUM* hashBN = NULL;
-    BIGNUM* plaintextBN = NULL;
-    BIGNUM* bigPrimeBN = NULL;
-    BN_CTX* ctx = NULL;
-    BIGNUM* ciphertextBN = NULL;
-    int ciphertextSize;
+        BIGNUM* hashBN = NULL;
+        BIGNUM* plaintextBN = NULL;
+        BIGNUM* bigPrimeBN = NULL;
+        BN_CTX* ctx = NULL;
+        BIGNUM* ciphertextBN = NULL;
+        int ciphertextSize;
 
-    hashBN = create_key_hash(password, iv);
+        hashBN = create_key_hash(password, iv);
 
-    if(0 == BN_dec2bn(&plaintextBN, plaintext)) handleErrors();
+        CHECK( BN_dec2bn(&plaintextBN, plaintext) );
 
-    if(0 == BN_dec2bn(&bigPrimeBN, BIG_PRIME)) handleErrors();
+        CHECK( BN_dec2bn(&bigPrimeBN, BIG_PRIME) );
 
-    ctx = BN_CTX_new();
-    ciphertextBN = BN_new();
+        ctx = BN_CTX_new();
+        ciphertextBN = BN_new();
 
-    if(0 == BN_mod_mul(ciphertextBN, plaintextBN, hashBN, bigPrimeBN, ctx)) handleErrors();
+        CHECK( BN_mod_mul(ciphertextBN, plaintextBN, hashBN, bigPrimeBN, ctx) );
 
-    *ciphertext = malloc(BN_num_bytes(ciphertextBN));
+        *ciphertext = malloc(BN_num_bytes(ciphertextBN));
 
-    if(0 == (ciphertextSize = BN_bn2bin(ciphertextBN, *ciphertext)) ) handleErrors();
+        CHECK( ciphertextSize = BN_bn2bin(ciphertextBN, *ciphertext) );
 
-    BN_CTX_free(ctx);
-    OPENSSL_free(ciphertextBN); 
-    OPENSSL_free(hashBN);
-    OPENSSL_free(plaintextBN);
-    OPENSSL_free(bigPrimeBN);
+        BN_CTX_free(ctx);
+        OPENSSL_free(ciphertextBN); 
+        OPENSSL_free(hashBN);
+        OPENSSL_free(plaintextBN);
+        OPENSSL_free(bigPrimeBN);
 
-    return ciphertextSize;
+        return ciphertextSize;
 }
 
 void decrypt_mul(const char* ciphertext, int ciphertextSize, const char* password, const char* iv, char** plaintextDec) 
 {
-    BIGNUM* hashBN = NULL;
-    BIGNUM* ciphertextBN = NULL;
-    BIGNUM* bigPrimeBN = NULL;
-    BN_CTX* ctx = NULL;
-    BN_CTX* ctx2 = NULL;
-    BIGNUM* plaintextBN = NULL;
-    BIGNUM* inverseBN = NULL;
-    int plaintextSize;
+        BIGNUM* hashBN = NULL;
+        BIGNUM* ciphertextBN = NULL;
+        BIGNUM* bigPrimeBN = NULL;
+        BN_CTX* ctx = NULL;
+        BN_CTX* ctx2 = NULL;
+        BIGNUM* plaintextBN = NULL;
+        BIGNUM* inverseBN = NULL;
+        int plaintextSize;
 
-    hashBN = create_key_hash(password, iv);
+        hashBN = create_key_hash(password, iv);
 
-    if(0 == (ciphertextBN = BN_bin2bn(ciphertext, ciphertextSize, NULL))) handleErrors(); 
+        CHECK( ciphertextBN = BN_bin2bn(ciphertext, ciphertextSize, NULL) ); 
 
-    if(0 == BN_dec2bn(&bigPrimeBN, BIG_PRIME)) handleErrors();
+        CHECK( BN_dec2bn(&bigPrimeBN, BIG_PRIME) );
 
-    purple_debug_misc("hka-plugin", "decrypt_mul (start compute inverse)\n");
+        purple_debug_misc("hka-plugin", "decrypt_mul (start compute inverse)\n");
 
-    // compute inverse
-    ctx = BN_CTX_new();
-    if(0 == (inverseBN = BN_mod_inverse(NULL, hashBN, bigPrimeBN, ctx))) handleErrors();
+        // compute inverse
+        ctx = BN_CTX_new();
+        CHECK( inverseBN = BN_mod_inverse(NULL, hashBN, bigPrimeBN, ctx) );
 
-    purple_debug_misc("hka-plugin", "decrypt_mul (inverse computed)\n");
+        purple_debug_misc("hka-plugin", "decrypt_mul (inverse computed)\n");
 
-    ctx2 = BN_CTX_new();
-    plaintextBN = BN_new();
+        ctx2 = BN_CTX_new();
+        plaintextBN = BN_new();
 
-    // divide by the hash
-    if(0 == BN_mod_mul(plaintextBN, ciphertextBN, inverseBN, bigPrimeBN, ctx2)) handleErrors();
+        // divide by the hash
+        CHECK( BN_mod_mul(plaintextBN, ciphertextBN, inverseBN, bigPrimeBN, ctx2) );
 
-    *plaintextDec = BN_bn2dec(plaintextBN);
+        *plaintextDec = BN_bn2dec(plaintextBN);
 
-    BN_CTX_free(ctx);
-    BN_CTX_free(ctx2);
-    OPENSSL_free(ciphertextBN); 
-    OPENSSL_free(hashBN);
-    OPENSSL_free(plaintextBN);
-    OPENSSL_free(bigPrimeBN);
-    OPENSSL_free(inverseBN);
+        BN_CTX_free(ctx);
+        BN_CTX_free(ctx2);
+        OPENSSL_free(ciphertextBN); 
+        OPENSSL_free(hashBN);
+        OPENSSL_free(plaintextBN);
+        OPENSSL_free(bigPrimeBN);
+        OPENSSL_free(inverseBN);
 }
 
 
@@ -360,88 +362,74 @@ void decrypt_mul(const char* ciphertext, int ciphertextSize, const char* passwor
 int encrypt_aes_256(const unsigned char *plaintext, int plaintext_len, const unsigned char *key,
     const unsigned char *iv, unsigned char **ciphertext)
 {
-    EVP_CIPHER_CTX *ctx;
+        EVP_CIPHER_CTX *ctx;
 
-    int len;
+        int len;
 
-    int ciphertext_len;
+        int ciphertext_len;
 
-    /* Create and initialise the context */
-    if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
+        /* Create and initialise the context */
+        CHECK( ctx = EVP_CIPHER_CTX_new() );
 
-    /* Initialise the encryption operation. IMPORTANT - ensure you use a key
-    ** and IV size appropriate for your cipher
-    ** In this example we are using 256 bit AES (i.e. a 256 bit key). The
-    ** IV size for *most* modes is the same as the block size. For AES this
-    ** is 128 bits */
-    if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
-        handleErrors();
+        // Initialise the encryption operation
+        CHECK( EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) );
 
-    printf("block size: %d\n", EVP_CIPHER_CTX_block_size(ctx));
+        *ciphertext = (unsigned char*) malloc(plaintext_len + EVP_CIPHER_CTX_block_size(ctx));
 
-    *ciphertext = (unsigned char*) malloc(plaintext_len + EVP_CIPHER_CTX_block_size(ctx));
+        /* Provide the message to be encrypted, and obtain the encrypted output.
+        ** EVP_EncryptUpdate can be called multiple times if necessary
+        **/
+        CHECK( EVP_EncryptUpdate(ctx, *ciphertext, &len, plaintext, plaintext_len) );
+        ciphertext_len = len;
 
-    /* Provide the message to be encrypted, and obtain the encrypted output.
-    ** EVP_EncryptUpdate can be called multiple times if necessary
-    **/
-    if(1 != EVP_EncryptUpdate(ctx, *ciphertext, &len, plaintext, plaintext_len))
-        handleErrors();
-    ciphertext_len = len;
+        /* Finalise the encryption. Further ciphertext bytes may be written at
+        ** this stage.
+        **/
+        CHECK( EVP_EncryptFinal_ex(ctx, *ciphertext + len, &len) );
+        ciphertext_len += len;
 
-    printf("ciphertext len: %d\n", ciphertext_len);
+        /* Clean up */
+        EVP_CIPHER_CTX_free(ctx);
 
-    /* Finalise the encryption. Further ciphertext bytes may be written at
-    ** this stage.
-    **/
-    if(1 != EVP_EncryptFinal_ex(ctx, *ciphertext + len, &len)) handleErrors();
-    ciphertext_len += len;
-
-    printf("padding len: %d\n", len);
-
-    /* Clean up */
-    EVP_CIPHER_CTX_free(ctx);
-
-    return ciphertext_len;
+        return ciphertext_len;
 }
 
 
 int decrypt_aes_256(const unsigned char *ciphertext, int ciphertext_len, const unsigned char *key,
     const unsigned char *iv, unsigned char *plaintext)
 {
-    EVP_CIPHER_CTX *ctx;
+        EVP_CIPHER_CTX *ctx;
 
-    int len;
+        int len;
 
-    int plaintext_len;
+        int plaintext_len;
 
-    /* Create and initialise the context */
-    if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
+        /* Create and initialise the context */
+        CHECK( ctx = EVP_CIPHER_CTX_new() );
 
-    /* Initialise the decryption operation. IMPORTANT - ensure you use a key
-    ** and IV size appropriate for your cipher
-    ** In this example we are using 256 bit AES (i.e. a 256 bit key). The
-    ** IV size for *most* modes is the same as the block size. For AES this
-    ** is 128 bits */
-    if(1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
-        handleErrors();
+        /* Initialise the decryption operation. IMPORTANT - ensure you use a key
+        ** and IV size appropriate for your cipher
+        ** In this example we are using 256 bit AES (i.e. a 256 bit key). The
+        ** IV size for *most* modes is the same as the block size. For AES this
+        ** is 128 bits */
+        CHECK( EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) );
 
-    /* Provide the message to be decrypted, and obtain the plaintext output.
-    ** EVP_DecryptUpdate can be called multiple times if necessary
-    **/
-    if(1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
-        handleErrors();
-    plaintext_len = len;
+        /* Provide the message to be decrypted, and obtain the plaintext output.
+        ** EVP_DecryptUpdate can be called multiple times if necessary
+        **/
+        CHECK( EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) );
+        plaintext_len = len;
 
-    /* Finalise the decryption. Further plaintext bytes may be written at
-    ** this stage.
-    **/
-    if(1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len)) handleErrors();
-    plaintext_len += len;
+        /* Finalise the decryption. Further plaintext bytes may be written at
+        ** this stage.
+        **/
+        CHECK( EVP_DecryptFinal_ex(ctx, plaintext + len, &len) );
+        plaintext_len += len;
 
-    /* Clean up */
-    EVP_CIPHER_CTX_free(ctx);
+        /* Clean up */
+        EVP_CIPHER_CTX_free(ctx);
 
-    return plaintext_len;
+        return plaintext_len;
 }
 
 // ------------------------------------------------- crypto end ----------------------------
@@ -501,7 +489,6 @@ char* decode_aes_256(const char* key, const char* stringMsg)
 static void
 hka_send_text(PurpleBuddy* buddy, gchar id, const gchar* text) 
 {
-
         Message* msg;
         gsize msgSize;
         PurpleConnection* connection;
@@ -532,7 +519,6 @@ hka_send_text(PurpleBuddy* buddy, gchar id, const gchar* text)
 static void
 hka_send_data(PurpleBuddy* buddy, gchar id, const gchar* data, gsize dataSize)
 {
-
         gchar* encodedDataMsg;
         DataMessage* dataMsg;
         gsize dataMsgSize;
@@ -687,8 +673,11 @@ hka_reset_variables(PurpleBuddy* buddy)
 static void
 hka_init_message(PurpleBuddy* buddy) 
 {
+        const char* initMsg = " The user is trying to establish an encrypted connection using Human Key Agreement protocol.\n \
+        You can download the plugin from https://github.com/apachuta/pidgin_plugin";
+
         hka_reset_variables(buddy);
-        hka_send_text(buddy, INIT, " Nie masz mojego super pluginu :(");
+        hka_send_text(buddy, INIT, initMsg);
         hka_set_protocol_state(buddy, INIT_RESPONSE);
 
         purple_debug_misc("hka-plugin", "hka_init_message (hka-protocol-state = %c)\n", 
@@ -771,7 +760,7 @@ hka_show_info(const gchar* primaryInfo, const gchar* secondaryInfo) {
         1, // number of actions
         _("_OK"), // action
         NULL  // callback
-  ); 
+        ); 
 
 }
 
@@ -983,12 +972,12 @@ hka_UC_PAK_step2(PurpleBuddy* buddy, const gchar* stringMsg)
 
         if(HKA.verify_mac(secret, secretSize, publicKey2, strlen(publicKey2), tag, tagSize))
         {
-              purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification positive)\n");   
+                purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification positive)\n");   
               
         }
         else
         {
-             purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification negative)\n");
+                purple_debug_misc("hka-plugin", "hka_UC_PAK_step2 (tag verification negative)\n");
         }
 
         // prepare data to send
@@ -1091,7 +1080,7 @@ void hka_covert_AKA_step1(PurpleBuddy* buddy, const gchar* stringMsg)
         g_free(publicKey2);
         g_free(secret);
         g_free(msg);
-        }
+}
 
 void hka_covert_AKA_step2(PurpleBuddy* buddy, const gchar* stringMsg)
 {
@@ -1156,13 +1145,13 @@ hka_captcha_cb(PurpleBuddy* buddy, const gchar* solution)
 
         purple_debug_misc("hka-plugin", "hka_captcha_cb (solution = %s)\n", solution);
 
-        if(state == SEND_CAPTCHA_RESPONSE) { //test mode !!
+        if(state == SEND_CAPTCHA_RESPONSE) { 
                 hka_create_and_set_password(buddy, oldPassword, solution);
                 
                 hka_UC_PAK_step0(buddy);
 
         }  
-        else if(state == UC_PAK_0) { //test mode !!
+        else if(state == UC_PAK_0) {
 
                 hka_create_and_set_password(buddy, solution, oldPassword);
 
@@ -1264,15 +1253,15 @@ load_image(gchar** imgData, gsize* imgSize) {
 
 void create_captcha(gchar** imgData, gsize* imgSize, gchar** solution) {
 
-  unsigned char im[70*200];
+        unsigned char im[70*200];
   
-  *imgData = (unsigned char*) g_malloc(gifsize);
-  *solution = (gchar*) g_malloc(6);
+        *imgData = (unsigned char*) g_malloc(gifsize);
+        *solution = (gchar*) g_malloc(6);
 
-  captcha(im, *solution);
-  makegif(im, *imgData);
+        captcha(im, *solution);
+        makegif(im, *imgData);
 
-  *imgSize = gifsize;
+        *imgSize = gifsize;
 }
 
 static gchar*
@@ -1309,21 +1298,21 @@ sending_im_msg_cb(PurpleAccount *account, char *recipient, char **buffer, void *
 
         if(hka_get_protocol_state(buddy) == FINISHED) {
                         
-            // encode
-            sessionKey = hka_get_session_key(buddy);
-            encodedMsg = HKA.encode(sessionKey, *buffer);
+                // encode
+                sessionKey = hka_get_session_key(buddy);
+                encodedMsg = HKA.encode(sessionKey, *buffer);
 
-            // prepare message
-            msgSize = sizeof(Message) + strlen(encodedMsg) + 1;
-            msg = (Message*) g_malloc(msgSize);
-            msg->tag = SPECIAL_TAG;
-            msg->id = FINISHED;
-            strcpy(msg->stringMsg, encodedMsg);
+                // prepare message
+                msgSize = sizeof(Message) + strlen(encodedMsg) + 1;
+                msg = (Message*) g_malloc(msgSize);
+                msg->tag = SPECIAL_TAG;
+                msg->id = FINISHED;
+                strcpy(msg->stringMsg, encodedMsg);
 
-            // replace message
-            g_free(*buffer);
-            g_free(encodedMsg);
-            *buffer = (gchar*) msg; 
+                // replace message
+                g_free(*buffer);
+                g_free(encodedMsg);
+                *buffer = (gchar*) msg; 
         }
 
         purple_debug_misc("hka-plugin", "sending_im_msg_cb (buffer: %s)\n", *buffer);
@@ -1440,13 +1429,12 @@ hka_start_protocol_cb(PurpleBlistNode* node, gpointer data)
         buddy = (PurpleBuddy*) node;
         state = hka_get_protocol_state(buddy);
 
-        purple_debug_misc("hka-plugin", "hka_start_protocol_cb (hka-protocol-state = %c)\n", 
-                          state);
+        purple_debug_misc("hka-plugin", "hka_start_protocol_cb (hka-protocol-state = %c)\n", state);
  
         if(state == FINISHED) 
         {
-                  purple_debug_misc("hka-plugin", "hka_start_protocol_cb (state FINISHED, session key = %s)\n", hka_get_session_key(buddy));
-                  hka_show_reset_confirmation(buddy);
+                purple_debug_misc("hka-plugin", "hka_start_protocol_cb (state FINISHED, session key = %s)\n", hka_get_session_key(buddy));
+                hka_show_reset_confirmation(buddy);
         }
         else // state == INIT or other
         {
@@ -1469,8 +1457,7 @@ blist_node_extended_menu_cb(PurpleBlistNode* node, GList** m)
 
         *m = g_list_append(*m, bna);
         bna = purple_menu_action_new(_("START PROTOCOL"), PURPLE_CALLBACK(hka_start_protocol_cb), NULL, NULL);
-        *m = g_list_append(*m, bna);
-        
+        *m = g_list_append(*m, bna); 
 }
 
 static void
@@ -1562,25 +1549,25 @@ plugin_load(PurplePlugin *plugin)
 
 static PurplePluginInfo info =
 {
-	PURPLE_PLUGIN_MAGIC,							/**< magic			*/
+	PURPLE_PLUGIN_MAGIC,							/**< magic		*/
 	PURPLE_MAJOR_VERSION,							/**< major version	*/
 	PURPLE_MINOR_VERSION,							/**< minor version	*/
-	PURPLE_PLUGIN_STANDARD,							/**< type			*/
+	PURPLE_PLUGIN_STANDARD,							/**< type		*/
 	NULL,									/**< ui_requirement	*/
-	0,									/**< flags			*/
+	0,									/**< flags		*/
 	NULL,									/**< dependencies	*/
 	PURPLE_PRIORITY_DEFAULT,						/**< priority		*/
 
-	"core-apachuta-hka",						        /**< id				*/
-	N_("Human Key Agreement"),						/**< name			*/
+	"core-apachuta-hka",						        /**< id			*/
+	N_("Human Key Agreement"),						/**< name		*/
 	PACKAGE_VERSION,							/**< version		*/
 	N_(""),                   	                                        /**< summary		*/
 	N_(""),		                                                        /**< description	*/
-	"Agnieszka Pachuta <pachuta.agnieszka@gmail.com>",			/**< author			*/
+	"Agnieszka Pachuta <pachuta.agnieszka@gmail.com>",			/**< author		*/
 	PURPLE_WEBSITE,								/**< homepage		*/
 
-	plugin_load,								/**< load			*/
-	NULL,									/**< unload			*/
+	plugin_load,								/**< load		*/
+	NULL,									/**< unload		*/
 	NULL,									/**< destroy		*/
 
 	NULL,									/**< ui_info		*/
