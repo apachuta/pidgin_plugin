@@ -2,10 +2,8 @@
 #define PURPLE_PLUGINS
 #endif
 
-#include "internal.h"
-
+#include <internal.h>
 #include <string.h>
-
 #include <conversation.h>
 #include <debug.h>
 #include <plugin.h>
@@ -13,11 +11,10 @@
 #include <signals.h>
 #include <util.h>
 #include <version.h>
-
-#include "connection.h"
-#include "notify.h"
-#include "server.h"
-#include "status.h"
+#include <connection.h>
+#include <notify.h>
+#include <server.h>
+#include <status.h>
 
 #include <openssl/hmac.h>
 #include <openssl/dh.h>
@@ -86,7 +83,7 @@ struct HumanKeyAgreementProtocol {
 typedef struct __attribute__((__packed__)) {
         gchar tag;
         gchar id;
-        gchar stringMsg[0]
+        gchar stringMsg[0];
 } Message;
 
 typedef struct __attribute__((__packed__)) {
@@ -673,7 +670,7 @@ hka_reset_variables(PurpleBuddy* buddy)
 static void
 hka_init_message(PurpleBuddy* buddy) 
 {
-        const char* initMsg = " The user is trying to establish an encrypted connection using Human Key Agreement protocol.\n \
+        const char* initMsg = " The user is trying to establish an encrypted connection using the Human Key Agreement protocol.\n \
         You can download the plugin from https://github.com/apachuta/pidgin_plugin";
 
         hka_reset_variables(buddy);
@@ -791,7 +788,7 @@ hka_show_reset_confirmation(PurpleBuddy* buddy)
 {
         PurplePlugin* plugin;
         const gchar* buddyName = purple_buddy_get_alias(buddy);
-        char* primaryInfo = g_strdup_printf("The connection with %s has already been secure. Do you want to establish a secure key again?", buddyName);
+        char* primaryInfo = g_strdup_printf("The connection with %s is already secure. Do you want to establish a secure key again?", buddyName);
 
         plugin = purple_plugins_find_with_id("core-apachuta-hka");
   
@@ -1197,7 +1194,7 @@ hka_show_captcha(gchar* stringMsg, PurpleBuddy* buddy)
         PurpleRequestField *field;
         const gchar* buddyName;
         gchar* text;
-        gchar* smallText = "The connecton will not be secure unless you get the confirmation.";
+        gchar* smallText = "The connecton will not be secure unless you get confirmation.";
         gchar state;
 
         state = hka_get_protocol_state(buddy); 
@@ -1205,11 +1202,11 @@ hka_show_captcha(gchar* stringMsg, PurpleBuddy* buddy)
         buddyName = purple_buddy_get_alias(buddy); 
 
         if(state == SEND_CAPTCHA_RESPONSE) { 
-                text = g_strdup_printf("Establish a secure connection with %s. Solve captcha", buddyName);
+                text = g_strdup_printf("Establish a secure connection with %s. Solve Captcha", buddyName);
 
         }  
         else if(state == UC_PAK_0) { 
-                text = g_strdup_printf("%s wants to establish a secure connection. Solve captcha.", buddyName);
+                text = g_strdup_printf("%s wants to establish a secure connection. Solve Captcha.", buddyName);
         }
 
 
@@ -1456,7 +1453,7 @@ blist_node_extended_menu_cb(PurpleBlistNode* node, GList** m)
                 return;
 
         *m = g_list_append(*m, bna);
-        bna = purple_menu_action_new(_("START PROTOCOL"), PURPLE_CALLBACK(hka_start_protocol_cb), NULL, NULL);
+        bna = purple_menu_action_new(_("Establish a secure key"), PURPLE_CALLBACK(hka_start_protocol_cb), NULL, NULL);
         *m = g_list_append(*m, bna); 
 }
 

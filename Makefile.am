@@ -1,6 +1,8 @@
 ACLOCAL_AMFLAGS = -I m4
 EXTRA_DIST = autogen.sh
 
+PIDGIN_HOME = /home/agnieszka/Pidgin/pidgin-2.10.7
+
 AM_CFLAGS = \
 	-I $(srcdir)/include \
 	-I /usr/include/dbus-1.0 \
@@ -9,7 +11,7 @@ AM_CFLAGS = \
 	-I /usr/include/glib-2.0/include \
 	-I /usr/lib64/glib-2.0 \
 	-I /usr/lib64/glib-2.0/include \
-	-I /home/agnieszka/Pidgin/pidgin-2.10.7/libpurple \
+	-I $(PIDGIN_HOME)/libpurple \
 	-lcrypto
 
 
